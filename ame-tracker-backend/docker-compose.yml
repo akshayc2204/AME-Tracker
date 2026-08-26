@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ame-tracker-db
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ame_tracker
+    volumes:
+      - ame_tracker_pg:/var/lib/postgresql/data
+
+volumes:
+  ame_tracker_pg:

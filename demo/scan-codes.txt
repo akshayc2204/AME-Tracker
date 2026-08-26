@@ -1,0 +1,33 @@
+AME Tracker demo scan codes — job P47184 (EXT/SABIYA CCGT-2)
+Upload demo/P47184.t4vjob + demo/fab-shop-p47184.xlsx from the portal.
+Client: Sabiya CCGT Client
+
+QR rows: 274 (one per VJOB piece, linked in file order)
+
+Scan the UUID, or JSON: {"ItemID":"<uuid>"}
+
+--- one sample per fitting ---
+Cut Duct  piece 11  3232c7b6-3fe5-4ee3-b922-1436bfa9fd41
+DC Tee  piece 113  d254e09b-b93f-4b7b-bec9-a207bd138024
+End Cap  piece 102  122b091e-95c9-4441-a607-cd03ea4c78ce
+Increase Takeoff  piece 56  87e8dcf0-2dca-4c4b-b940-c5551aab43f3
+Non 90 Elbow  piece 114  785e44e8-e40c-45ca-90dc-33d32d550a5a
+Radius Elbow  piece 115  193ea7de-e908-440d-9804-0e4463aafac2
+Rct. Tee  piece 90  b5355c74-9c4a-4fa3-97e1-f126d9e9c7a9
+Standard Duct  piece 1  ce849510-4209-42b3-b67d-8cc4161ee828
+Transition 4 Piece  piece 100  6ec7ad26-3fd6-4795-adea-178fa507bbb7
+Y Branch  piece 98  e6543bbb-38d5-4389-a90a-bc2d7b049c6e
+
+--- first 12 rows ---
+piece 1      Standard Duct          ce849510-4209-42b3-b67d-8cc4161ee828
+piece 1      Standard Duct          0e8265d1-3a6f-4375-93ec-8a95196a3a02
+piece 1      Standard Duct          b30292c5-266c-4dda-950c-2fd3b10c0931
+piece 1      Standard Duct          2956af96-7505-42e3-8025-b1afa3559175
+piece 1      Standard Duct          75cf2cd8-6f81-49ed-b8f4-c0c4fbe73b62
+piece 10     Standard Duct          6c06d3d3-8290-4224-ba43-32cbfd958842
+piece 10     Standard Duct          1534e289-7205-439e-b78d-cc19bb15e71f
+piece 10     Standard Duct          60267adf-3dcd-4ab1-9129-79362eff6bd1
+piece 10     Standard Duct          6aa69fa5-f598-45f5-a206-0f0fe170fd80
+piece 10     Standard Duct          835c4461-9074-4e11-8745-c5c9072a4ddf
+piece 10     Standard Duct          dd2043ae-1e6e-43d6-85fd-899827c1d482
+piece 10     Standard Duct          dc78749f-6f69-4853-9e52-9b68d82a3f56

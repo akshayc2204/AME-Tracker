@@ -1,0 +1,253 @@
+// AME Tracker — Prisma Schema
+// Hierarchy: Project → Job → Item → ItemUnit
+// Supports SQLite (local/dev) and PostgreSQL (production) via provider switch.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("ADMIN")
+  isActive     Int      @default(1) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  dispatches     Dispatch[]      @relation("DispatchCreatedBy")
+  loadedUnits    DispatchPart[]  @relation("DispatchPartLoadedBy")
+  trackingEvents TrackingEvent[]
+  importBatches  ImportBatch[]
+  auditLogs      AuditLog[]
+
+  @@map("users")
+}
+
+model Project {
+  id              Int      @id @default(autoincrement())
+  sourceProjectId Int?     @unique @map("source_project_id")
+  projectName     String   @unique @map("project_name")
+  projectType     String   @default("EXTERNAL") @map("project_type")
+  isActive        Int      @default(1) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  jobs Job[]
+
+  @@map("projects")
+}
+
+model Job {
+  id          Int      @id @default(autoincrement())
+  projectId   Int?     @map("project_id")
+  sourceJobId String   @unique @map("source_job_id")
+  jobName     String   @map("job_name")
+  labelColor  String?  @map("label_color")
+  isActive    Int      @default(1) @map("is_active")
+  isCompleted Int?     @map("is_completed")
+  sourceFile  String?  @map("source_file")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  project       Project?      @relation(fields: [projectId], references: [id])
+  items         Item[]
+  itemUnits     ItemUnit[]
+  dispatches    Dispatch[]
+  importBatches ImportBatch[]
+
+  @@index([sourceJobId], map: "idx_jobs_source_job_id")
+  @@index([projectId], map: "idx_jobs_project")
+  @@map("jobs")
+}
+
+/// Trimble Items row — gauge-report grain (Project → Job → Metal aggregates here).
+/// Tracking fields here mirror the item's first unit; per-piece truth lives on ItemUnit.
+model Item {
+  id                   Int      @id @default(autoincrement())
+  jobId                Int      @map("job_id")
+  sourceItemId         Int      @map("source_item_id")
+  pieceNumber          String?  @map("piece_number")
+  fitting              String?
+  metal                String?
+  liner                String?
+  dimensions           String?
+  instructions         String?
+  quantity             Int      @default(1)
+  isFitting            Int      @default(0) @map("is_fitting")
+  metricWeight         Float?   @map("metric_weight")
+  weight               Float?
+  metricArea           Float?   @map("metric_area")
+  area                 Float?
+  gauge                Int?
+  trackingStatus       String?  @map("tracking_status")
+  statusSequence       Int?     @map("status_sequence")
+  storage              String?
+  location             String?
+  container            String?
+  inContainer          Int      @default(0) @map("in_container")
+  /// First unit's IDItemTracking; kept for lookups that predate ItemUnit tracking ids.
+  sourceItemTrackingId Int?     @map("source_item_tracking_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at")
+
+  job   Job        @relation(fields: [jobId], references: [id])
+  units ItemUnit[]
+
+  @@unique([jobId, sourceItemId])
+  @@index([jobId], map: "idx_items_job")
+  @@index([gauge], map: "idx_items_gauge")
+  @@index([metal], map: "idx_items_metal")
+  @@map("items")
+}
+
+/// One physical piece: a Trimble ItemTracking row paired with its QtyItemGuids QR sticker.
+/// Trimble stores one of each per unit of Item.Quantity, so both live at this grain.
+model ItemUnit {
+  id                   Int       @id @default(autoincrement())
+  itemId               Int       @map("item_id")
+  jobId                Int       @map("job_id")
+  unitIndex            Int       @default(1) @map("unit_index")
+  qrCode               String    @unique @map("qr_code")
+  sourceQtyGuidId      Int?      @unique @map("source_qty_guid_id")
+  guidInUse            Int       @default(0) @map("guid_in_use")
+  hasSourceQr          Int       @default(0) @map("has_source_qr")
+  sourceItemTrackingId Int?      @unique @map("source_item_tracking_id")
+  trackingStatus       String?   @map("tracking_status")
+  statusSequence       Int?      @map("status_sequence")
+  trackingDate         DateTime? @map("tracking_date")
+  storage              String?
+  location             String?
+  container            String?
+  inContainer          Int       @default(0) @map("in_container")
+  currentStatus        String    @default("PENDING") @map("current_status")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  item           Item            @relation(fields: [itemId], references: [id])
+  job            Job             @relation(fields: [jobId], references: [id])
+  dispatchParts  DispatchPart[]
+  trackingEvents TrackingEvent[]
+
+  @@unique([itemId, unitIndex])
+  @@index([jobId], map: "idx_item_units_job")
+  @@index([qrCode], map: "idx_item_units_qr")
+  @@index([currentStatus], map: "idx_item_units_status")
+  @@index([sourceItemTrackingId], map: "idx_item_units_tracking_id")
+  @@map("item_units")
+}
+
+model TrackingEvent {
+  id                 Int      @id @default(autoincrement())
+  itemUnitId         Int      @map("item_unit_id")
+  trackingIdentifier String?  @map("tracking_identifier")
+  qrCode             String?  @map("qr_code")
+  eventType          String   @map("event_type")
+  status             String
+  source             String
+  userId             Int?     @map("user_id")
+  dispatchId         Int?     @map("dispatch_id")
+  vehicleNumber      String?  @map("vehicle_number")
+  reason             String?
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  itemUnit ItemUnit @relation(fields: [itemUnitId], references: [id])
+  user     User?    @relation(fields: [userId], references: [id])
+
+  @@index([itemUnitId, createdAt], map: "idx_tracking_unit")
+  @@index([qrCode], map: "idx_tracking_qr")
+  @@map("tracking_events")
+}
+
+model Dispatch {
+  id               Int       @id @default(autoincrement())
+  jobId            Int       @map("job_id")
+  vehicleNumber    String?   @map("vehicle_number")
+  vehicleImagePath String?   @map("vehicle_image_path")
+  status           String    @default("OPEN")
+  createdBy        Int?      @map("created_by")
+  startedAt        DateTime  @default(now()) @map("started_at")
+  completedAt      DateTime? @map("completed_at")
+  notes            String?
+
+  job           Job            @relation(fields: [jobId], references: [id])
+  creator       User?          @relation("DispatchCreatedBy", fields: [createdBy], references: [id])
+  dispatchParts DispatchPart[]
+
+  @@map("dispatches")
+}
+
+model DispatchPart {
+  id         Int      @id @default(autoincrement())
+  dispatchId Int      @map("dispatch_id")
+  itemUnitId Int      @map("item_unit_id")
+  loadedAt   DateTime @default(now()) @map("loaded_at")
+  loadedBy   Int?     @map("loaded_by")
+
+  dispatch Dispatch @relation(fields: [dispatchId], references: [id])
+  itemUnit ItemUnit @relation(fields: [itemUnitId], references: [id])
+  loader   User?    @relation("DispatchPartLoadedBy", fields: [loadedBy], references: [id])
+
+  @@unique([dispatchId, itemUnitId])
+  @@index([dispatchId, itemUnitId], map: "idx_dispatch_units")
+  @@map("dispatch_parts")
+}
+
+model ImportBatch {
+  id               Int       @id @default(autoincrement())
+  jobId            Int?      @map("job_id")
+  t4vjobFilename   String?   @map("t4vjob_filename")
+  fabshopFilename  String?   @map("fabshop_filename")
+  jobReportFilename String?  @map("job_report_filename")
+  status           String
+  totalFabshopRows Int?      @default(0) @map("total_fabshop_rows")
+  matchedRows      Int?      @default(0) @map("matched_rows")
+  unmatchedRows    Int?      @default(0) @map("unmatched_rows")
+  conflictRows     Int?      @default(0) @map("conflict_rows")
+  duplicateRows    Int?      @default(0) @map("duplicate_rows")
+  uploadedBy       Int?      @map("uploaded_by")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  completedAt      DateTime? @map("completed_at")
+
+  job      Job?          @relation(fields: [jobId], references: [id])
+  uploader User?         @relation(fields: [uploadedBy], references: [id])
+  errors   ImportError[]
+
+  @@map("import_batches")
+}
+
+model ImportError {
+  id            Int      @id @default(autoincrement())
+  importBatchId Int      @map("import_batch_id")
+  sourceFile    String   @map("source_file")
+  rowNumber     Int?     @map("row_number")
+  errorType     String   @map("error_type")
+  message       String
+  rawData       String?  @map("raw_data")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id])
+
+  @@map("import_errors")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?     @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  beforeJson String?  @map("before_json")
+  afterJson  String?  @map("after_json")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
