@@ -1,6 +1,8 @@
+// Import page is currently disabled. Route/nav/buttons are commented out;
+// jobs are ingested from the DataUploads folder sync instead.
 import { useState, useRef, useCallback, useEffect, type RefObject } from 'react';
 import {
-  Upload, FileText, CheckCircle, X, History, RefreshCw, FolderUp,
+  Upload, FileText, CheckCircle, X, History, RefreshCw, FolderUp, FolderSync,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -24,6 +26,35 @@ interface ImportRecord {
 
 type FileSlot = 'vjob' | 'fabshop' | 'jobReport';
 
+type FolderPair = {
+  pairKey: string;
+  t4vjobFile: string | null;
+  xlsxFile: string | null;
+  sourceJobId: string | null;
+  jobName: string | null;
+  status: 'PENDING' | 'SYNCED' | 'SKIPPED' | 'FAILED' | 'INCOMPLETE';
+  itemsImported: number;
+  unitsImported: number;
+  message: string | null;
+  lastSyncedAt: string | null;
+};
+
+type FolderSyncStatus = {
+  enabled: boolean;
+  folderPath: string;
+  intervalMinutes: number;
+  running: boolean;
+  lastRun: {
+    imported: number;
+    skipped: number;
+    failed: number;
+    incomplete: number;
+    finishedAt: string;
+  } | null;
+  pairs: FolderPair[];
+  error?: string;
+};
+
 function formatDateTime(value?: string | null): string {
   if (!value) return '—';
   return new Date(value).toLocaleString(undefined, {
@@ -41,6 +72,15 @@ function statusBadgeClass(status: string): string {
   if (s === 'COMPLETED_WITH_ERRORS') return 'badge-partial';
   if (s === 'FAILED' || s === 'ERROR') return 'badge-failed';
   if (s === 'SYNCING' || s === 'VALIDATING' || s === 'PROCESSING') return 'badge-loaded';
+  return 'badge-pending';
+}
+
+function folderBadgeClass(status: string): string {
+  const s = status.toUpperCase();
+  if (s === 'SYNCED') return 'badge-success';
+  if (s === 'SKIPPED') return 'badge-partial';
+  if (s === 'FAILED' || s === 'ERROR') return 'badge-failed';
+  if (s === 'INCOMPLETE') return 'badge-loaded';
   return 'badge-pending';
 }
 
@@ -91,6 +131,9 @@ export default function Import() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [history, setHistory] = useState<ImportRecord[]>([]);
+  const [folderStatus, setFolderStatus] = useState<FolderSyncStatus | null>(null);
+  const [folderLoading, setFolderLoading] = useState(true);
+  const [folderSyncing, setFolderSyncing] = useState(false);
   const vjobRef = useRef<HTMLInputElement>(null);
   const fabshopRef = useRef<HTMLInputElement>(null);
   const reportRef = useRef<HTMLInputElement>(null);
@@ -109,9 +152,22 @@ export default function Import() {
     }
   }, []);
 
+  const loadFolderStatus = useCallback(async () => {
+    setFolderLoading(true);
+    try {
+      const res = await api.getFolderSyncStatus();
+      if (res) setFolderStatus(res);
+    } catch {
+      /* keep previous */
+    } finally {
+      setFolderLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadHistory();
-  }, [loadHistory]);
+    loadFolderStatus();
+  }, [loadHistory, loadFolderStatus]);
 
   const appendFiles = useCallback((slot: FileSlot, incoming: FileList | File[]) => {
     const list = Array.from(incoming);
@@ -167,6 +223,7 @@ export default function Import() {
       }
 
       await loadHistory();
+      await loadFolderStatus();
       if (okCount > 0) {
         setSuccessMessage(
           okCount === 1
@@ -180,6 +237,25 @@ export default function Import() {
       if (errors.length) setParseError(errors.join('\n'));
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function handleFolderSync() {
+    setFolderSyncing(true);
+    setParseError(null);
+    setSuccessMessage(null);
+    try {
+      const result = await api.runFolderSync();
+      await loadFolderStatus();
+      await loadHistory();
+      setSuccessMessage(
+        `Folder sync finished: ${result.imported} imported, ${result.skipped} already in database, ${result.failed} failed, ${result.incomplete} incomplete pairs.`,
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Folder sync failed';
+      setParseError(message);
+    } finally {
+      setFolderSyncing(false);
     }
   }
 
@@ -257,7 +333,7 @@ export default function Import() {
     <>
       <div className="page-header">
         <h2>Import files</h2>
-        <p>Manual upload only. Sync from Trimble stays on the Dashboard.</p>
+        <p>Auto-sync paired .t4vjob + item schedule .xlsx from DataUploads, or upload files manually.</p>
       </div>
 
       {parseError && (
@@ -272,6 +348,97 @@ export default function Import() {
           {successMessage}
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FolderSync size={18} color="var(--green-600)" />
+              Folder auto-sync
+            </div>
+            <div className="card-subtitle">
+              Watches {folderStatus?.folderPath || '/Users/mangeshkharat/DataUploads'} every {folderStatus?.intervalMinutes ?? 5} minutes.
+              Pairs <code>.t4vjob</code> + item schedule <code>.xlsx</code> with the same name (e.g. 637) into the item schedule table. Already-imported jobs are skipped.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={loadFolderStatus} disabled={folderLoading || folderSyncing}>
+              <RefreshCw size={14} className={folderLoading ? 'animate-spin' : undefined} />
+              Refresh
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={folderSyncing || folderStatus?.enabled === false}
+              onClick={handleFolderSync}
+            >
+              <FolderSync size={16} />
+              {folderSyncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
+        </div>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Job</th>
+                <th>Files</th>
+                <th>Rows / pieces</th>
+                <th>Status</th>
+                <th>Last check</th>
+              </tr>
+            </thead>
+            <tbody>
+              {folderLoading && !folderStatus ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                    Checking DataUploads…
+                  </td>
+                </tr>
+              ) : (folderStatus?.pairs.length ?? 0) === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                    {folderStatus?.error
+                      ? folderStatus.error
+                      : 'No .t4vjob / .xlsx pairs in the watch folder yet.'}
+                  </td>
+                </tr>
+              ) : (
+                folderStatus!.pairs.map((pair) => (
+                  <tr key={pair.pairKey}>
+                    <td style={{ fontWeight: 600 }}>{pair.pairKey}</td>
+                    <td>
+                      <div style={{ fontSize: 13 }}>{pair.jobName || (pair.sourceJobId ? `Job ${pair.sourceJobId}` : '—')}</div>
+                      {pair.sourceJobId && pair.jobName && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{pair.sourceJobId}</div>
+                      )}
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {[pair.t4vjobFile, pair.xlsxFile].filter(Boolean).join(' + ') || '—'}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>
+                      {pair.itemsImported || pair.unitsImported
+                        ? `${pair.itemsImported} / ${pair.unitsImported}`
+                        : '—'}
+                    </td>
+                    <td>
+                      <span className={'badge ' + folderBadgeClass(pair.status)}>{pair.status}</span>
+                      {pair.message && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, maxWidth: 280 }}>
+                          {pair.message}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {formatDateTime(pair.lastSyncedAt || folderStatus?.lastRun?.finishedAt)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-header">

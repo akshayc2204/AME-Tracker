@@ -31,6 +31,16 @@ export class ProductsController {
     )
   }
 
+  @Get('schedule')
+  async schedule(@Query('jobCode') jobCode?: string) {
+    return ok(await this.productsService.listItemSchedule(jobCode))
+  }
+
+  @Get('tracking-export')
+  async trackingExport(@Query('jobCode') jobCode?: string) {
+    return ok(await this.productsService.listTrackingExport(jobCode))
+  }
+
   @Get('qr-labels')
   async qrLabels(@Query('jobCode') jobCode?: string) {
     return ok(await this.productsService.listQrLabels(jobCode))

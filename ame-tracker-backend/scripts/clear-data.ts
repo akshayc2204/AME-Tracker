@@ -11,6 +11,7 @@ async function main() {
   await prisma.dispatch.deleteMany()
   await prisma.importError.deleteMany()
   await prisma.importBatch.deleteMany()
+  await prisma.fileSync.deleteMany()
   await prisma.itemUnit.deleteMany()
   await prisma.item.deleteMany()
   await prisma.job.deleteMany()

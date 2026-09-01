@@ -67,11 +67,19 @@ const initialState: AppState = {
   kpi: DASHBOARD_KPI,
 };
 
+interface AppUser {
+  id: string;
+  name: string;
+  role: string;
+  avatar: string;
+  email?: string;
+}
+
 interface AppContextValue {
   state: AppState;
   dispatch: React.Dispatch<Action>;
-  currentUser: { id: string; name: string; role: string; avatar: string };
-  setCurrentUser: (u: { id: string; name: string; role: string; avatar: string }) => void;
+  currentUser: AppUser;
+  setCurrentUser: React.Dispatch<React.SetStateAction<AppUser>>;
   isLiveBackend: boolean;
 }
 
@@ -79,7 +87,13 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [currentUser, setCurrentUser] = useState({ id: 'u1', name: 'System Admin', role: 'ADMIN', avatar: 'SA' });
+  const [currentUser, setCurrentUser] = useState<AppUser>({
+    id: 'u1',
+    name: 'System Admin',
+    role: 'ADMIN',
+    avatar: 'SA',
+    email: 'admin@ame.local',
+  });
   const [isLiveBackend, setIsLiveBackend] = useState(false);
 
   useEffect(() => {
@@ -93,6 +107,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               name: user.fullName || 'Admin',
               role: user.role || 'ADMIN',
               avatar: (user.fullName || 'A').slice(0, 2).toUpperCase(),
+              email: user.email,
             });
             setIsLiveBackend(true);
           }

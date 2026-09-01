@@ -1,10 +1,10 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { JwtService } from '@nestjs/jwt'
 import * as bcrypt from 'bcrypt'
 import { PrismaService } from '../prisma/prisma.service'
 import { AuditService } from '../audit/audit.service'
-import { LoginDto } from './dto/login.dto'
+import { LoginDto, UpdateProfileDto } from './dto/login.dto'
 
 @Injectable()
 export class AuthService {
@@ -115,6 +115,70 @@ export class AuthService {
       role: user.role,
       isActive: user.isActive,
       createdAt: user.createdAt,
+    }
+  }
+
+  async updateProfile(userId: number, dto: UpdateProfileDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } })
+    if (!user || user.isActive !== 1) {
+      throw new UnauthorizedException({
+        errorCode: 'UNAUTHORIZED',
+        message: 'User not found',
+      })
+    }
+
+    const nextName = (dto.fullName ?? dto.name)?.trim()
+    const data: { name?: string; passwordHash?: string } = {}
+
+    if (nextName) {
+      data.name = nextName
+    }
+
+    if (dto.newPassword) {
+      if (dto.newPassword.length < 6) {
+        throw new BadRequestException({
+          errorCode: 'PASSWORD_TOO_SHORT',
+          message: 'New password must be at least 6 characters',
+        })
+      }
+      data.passwordHash = await bcrypt.hash(dto.newPassword, 10)
+    }
+
+    if (!data.name && !data.passwordHash) {
+      throw new BadRequestException({
+        errorCode: 'NOTHING_TO_UPDATE',
+        message: 'Enter a new name or password to save',
+      })
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+    })
+
+    await this.audit.log({
+      userId,
+      action: data.passwordHash ? 'AUTH_PASSWORD_CHANGE' : 'AUTH_PROFILE_UPDATE',
+      entityType: 'User',
+      entityId: String(userId),
+    })
+
+    return {
+      id: updated.id,
+      email: updated.email,
+      fullName: updated.name,
+      name: updated.name,
+      role: updated.role,
+      isActive: updated.isActive,
+      createdAt: updated.createdAt,
     }
   }
 

@@ -1,6 +1,6 @@
 # AME Tracker
 
-End-to-end fabrication tracking for ductwork: import or sync jobs from Trimble FabShop, print/scan QR stickers, load trucks, and generate gauge / gate-pass reports.
+End-to-end fabrication tracking for ductwork: import or sync jobs from Trimble FabShop, print/scan QR stickers, load trucks, and generate gauge / shipping-list reports.
 
 ```text
 AME-Tracker/
@@ -43,7 +43,7 @@ AME-Tracker/
 | **Units / QR** | One physical unit per QR sticker (`ItemUnit`) |
 | **Dispatch** | Mobile operators scan QR onto a transit, capture truck photo, complete load |
 | **Live ops** | Portal dashboard with Socket.IO scan events |
-| **Reports** | Gauge (dispatch summary by metal), gate pass PDF, QR label PDF, dispatch CSV |
+| **Reports** | Gauge (dispatch summary by metal), shipping list PDF, QR label PDF, dispatch CSV |
 
 ---
 
@@ -126,7 +126,7 @@ Project
 
 6. REPORTS
    Gauge report (by project / job / metal)
-   Gate pass PDF
+   Shipping list PDF
    Dispatch CSV
 ```
 
@@ -276,7 +276,7 @@ src/
 ├── fabshop-db/     Trimble SQL client + sync service
 ├── transits/       Dispatch create / scan / photo / complete
 ├── dashboard/      KPIs + Socket.IO gateway
-├── reports/        Gauge, gate pass, QR PDF, CSV
+├── reports/        Gauge, shipping list, QR PDF, CSV
 ├── storage/        Local uploads
 ├── audit/          Action log
 └── prisma/         PrismaService
@@ -312,7 +312,7 @@ src/
 | Projects | Browse projects / jobs / parts |
 | Manual Track | Search + portal ship |
 | Dispatch | Transits list / detail |
-| Reports | Dispatch table, gauge, gate pass |
+| Reports | Dispatch table, gauge, shipping list |
 
 ### Mobile — `ame-tracker-mobile/`
 
@@ -337,7 +337,7 @@ Base: `http://localhost:3000/api`
 | Products | `GET /products`, status updates |
 | Transits | `POST /transits`, scan, photo, complete |
 | Dashboard | `GET /dashboard`, Socket.IO room `dashboard` |
-| Reports | gauge preview/xlsx, gate-pass pdf, job QR pdf |
+| Reports | gauge preview/xlsx, shipping-list pdf, job QR pdf |
 
 ---
 
@@ -346,7 +346,7 @@ Base: `http://localhost:3000/api`
 | Report | Source fields | Output |
 |--------|---------------|--------|
 | **Gauge** | Project, Job, Metal, gauge, IsFitting, MetricWeight, shipped units | Excel dispatch summary |
-| **Gate pass** | Shipped units on a date / transit | PDF |
+| **Shipping list** | Shipped units on a date / transit | PDF |
 | **QR labels** | Job units + QR | PDF stickers |
 | **Dispatch CSV** | Portal Reports table | CSV |
 

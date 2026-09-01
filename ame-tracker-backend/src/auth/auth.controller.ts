@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common'
 import { AuthService } from './auth.service'
-import { LoginDto, LogoutDto, RefreshDto } from './dto/login.dto'
+import { LoginDto, LogoutDto, RefreshDto, UpdateProfileDto } from './dto/login.dto'
 import { ok } from '../common/dto/api-response'
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard'
 import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
@@ -33,5 +33,12 @@ export class AuthController {
   async me(@CurrentUser() user: AuthUser) {
     const data = await this.authService.me(user.id)
     return ok(data)
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('me')
+  async updateMe(@CurrentUser() user: AuthUser, @Body() dto: UpdateProfileDto) {
+    const data = await this.authService.updateProfile(user.id, dto)
+    return ok(data, 'Profile updated')
   }
 }

@@ -86,6 +86,14 @@ model Item {
   metricArea           Float?   @map("metric_area")
   area                 Float?
   gauge                Int?
+  /// Item Schedule "Alpha #" — join key to .t4vjob PieceNbr.
+  alphaNumber          String?  @map("alpha_number")
+  drawing              String?
+  floor                String?
+  systemName           String?  @map("system_name")
+  pressure             String?
+  /// Remaining Item Schedule columns (Cost, Joints, Seams, …) as JSON.
+  scheduleJson         String?  @map("schedule_json")
   trackingStatus       String?  @map("tracking_status")
   statusSequence       Int?     @map("status_sequence")
   storage              String?
@@ -104,6 +112,7 @@ model Item {
   @@index([jobId], map: "idx_items_job")
   @@index([gauge], map: "idx_items_gauge")
   @@index([metal], map: "idx_items_metal")
+  @@index([jobId, alphaNumber], map: "idx_items_alpha")
   @@map("items")
 }
 
@@ -126,6 +135,15 @@ model ItemUnit {
   location             String?
   container            String?
   inContainer          Int       @default(0) @map("in_container")
+  /// Tracking Export sheet columns (one row per physical piece / ItemTracking).
+  pieceNbr             String?   @map("piece_nbr")
+  fitting              String?
+  description          String?
+  scanDate             String?   @map("scan_date")
+  component            Int       @default(0)
+  backOrdered          String?   @map("back_ordered")
+  /// Remaining .t4vjob keys not mapped above, as JSON.
+  trackingJson         String?   @map("tracking_json")
   currentStatus        String    @default("PENDING") @map("current_status")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
@@ -237,6 +255,30 @@ model ImportError {
   @@map("import_errors")
 }
 
+/// Tracks which DataUploads file pairs have been imported into items.
+model FileSync {
+  id            Int      @id @default(autoincrement())
+  pairKey       String   @map("pair_key")
+  t4vjobPath    String   @map("t4vjob_path")
+  xlsxPath      String   @map("xlsx_path")
+  t4vjobHash    String   @map("t4vjob_hash")
+  xlsxHash      String   @map("xlsx_hash")
+  sourceJobId   String?  @map("source_job_id")
+  jobId         Int?     @map("job_id")
+  importBatchId Int?     @map("import_batch_id")
+  status        String
+  itemsImported Int      @default(0) @map("items_imported")
+  unitsImported Int      @default(0) @map("units_imported")
+  message       String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([pairKey, t4vjobHash, xlsxHash])
+  @@index([pairKey], map: "idx_file_syncs_pair")
+  @@index([sourceJobId], map: "idx_file_syncs_job")
+  @@map("file_syncs")
+}
+
 model AuditLog {
   id         Int      @id @default(autoincrement())
   userId     Int?     @map("user_id")
@@ -250,4 +292,13 @@ model AuditLog {
   user User? @relation(fields: [userId], references: [id])
 
   @@map("audit_logs")
+}
+
+/// Key/value settings saved from the System Admin page (folder sync path, etc).
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
 }

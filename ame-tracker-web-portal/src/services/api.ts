@@ -234,7 +234,27 @@ export const api = {
         fullName: string;
         role: string;
         isActive: number;
+        createdAt?: string;
       }>('/auth/me')
+    ).data;
+  },
+
+  async updateProfile(input: {
+    fullName?: string;
+    newPassword?: string;
+  }) {
+    return (
+      await request<{
+        id: number;
+        email: string;
+        fullName: string;
+        role: string;
+        isActive: number;
+        createdAt?: string;
+      }>('/auth/me', {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      })
     ).data;
   },
 
@@ -359,6 +379,52 @@ export const api = {
     ).data;
   },
 
+  async getItemSchedule(jobCode?: string) {
+    const query = jobCode ? `?jobCode=${encodeURIComponent(jobCode)}` : '';
+    return (
+      await request<{
+        items: Array<{
+          id: string;
+          jobId: string;
+          sourceItemId: number;
+          values: Record<string, string | number | null>;
+          status: string;
+          trackingDateTime: string | null;
+          shippedUnits: number;
+          pendingUnits: number;
+          trackingRecords: Array<{
+            id: string;
+            partId: string;
+            itemTracking: string;
+            qrCode: string;
+            status: string;
+            trackingDateTime?: string | null;
+          }>;
+        }>;
+        total: number;
+        totalQty: number;
+      }>(`/products/schedule${query}`)
+    ).data;
+  },
+
+  async getTrackingExport(jobCode?: string) {
+    const query = jobCode ? `?jobCode=${encodeURIComponent(jobCode)}` : '';
+    return (
+      await request<{
+        items: Array<{
+          id: string;
+          jobId: string;
+          itemId: string;
+          qrCode: string;
+          status: string;
+          trackingDateTime: string | null;
+          values: Record<string, string | number | boolean | null>;
+        }>;
+        total: number;
+      }>(`/products/tracking-export${query}`)
+    ).data;
+  },
+
   async getQrLabels(jobCode?: string) {
     const query = jobCode ? `?jobCode=${encodeURIComponent(jobCode)}` : '';
     return (await request<Array<any>>(`/products/qr-labels${query}`)).data;
@@ -461,9 +527,100 @@ export const api = {
     ).data;
   },
 
-  async getImports(source?: 'upload' | 'sync') {
+  async getImports(source?: 'upload' | 'sync' | 'folder') {
     const q = source ? `?source=${encodeURIComponent(source)}` : '';
     return (await request<Array<any>>(`/imports${q}`)).data;
+  },
+
+  async getFolderSyncStatus() {
+    return (
+      await request<{
+        enabled: boolean;
+        folderPath: string;
+        intervalMinutes: number;
+        running: boolean;
+        lastRun: {
+          reason: string;
+          scannedPairs: number;
+          imported: number;
+          skipped: number;
+          failed: number;
+          incomplete: number;
+          startedAt: string;
+          finishedAt: string;
+        } | null;
+        pairs: Array<{
+          pairKey: string;
+          t4vjobFile: string | null;
+          xlsxFile: string | null;
+          sourceJobId: string | null;
+          jobName: string | null;
+          status: 'PENDING' | 'SYNCED' | 'SKIPPED' | 'FAILED' | 'INCOMPLETE';
+          itemsImported: number;
+          unitsImported: number;
+          message: string | null;
+          lastSyncedAt: string | null;
+        }>;
+        error?: string;
+      }>('/folder-sync/status')
+    ).data;
+  },
+
+  async updateFolderSyncSettings(input: { folderPath?: string; intervalMinutes?: number }) {
+    return (
+      await request<{
+        enabled: boolean;
+        folderPath: string;
+        intervalMinutes: number;
+        running: boolean;
+        lastRun: {
+          reason: string;
+          scannedPairs: number;
+          imported: number;
+          skipped: number;
+          failed: number;
+          incomplete: number;
+          startedAt: string;
+          finishedAt: string;
+        } | null;
+        pairs: Array<{
+          pairKey: string;
+          t4vjobFile: string | null;
+          xlsxFile: string | null;
+          sourceJobId: string | null;
+          jobName: string | null;
+          status: 'PENDING' | 'SYNCED' | 'SKIPPED' | 'FAILED' | 'INCOMPLETE';
+          itemsImported: number;
+          unitsImported: number;
+          message: string | null;
+          lastSyncedAt: string | null;
+        }>;
+        error?: string;
+      }>('/folder-sync/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      })
+    ).data;
+  },
+
+  async runFolderSync() {
+    return (
+      await request<{
+        reason: string;
+        scannedPairs: number;
+        imported: number;
+        skipped: number;
+        failed: number;
+        incomplete: number;
+        pairs: Array<{
+          pairKey: string;
+          status: string;
+          itemsImported: number;
+          unitsImported: number;
+          message: string | null;
+        }>;
+      }>('/folder-sync/run', { method: 'POST' })
+    ).data;
   },
 
   // Dispatches / Transits
@@ -651,7 +808,7 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
-  /** Preview Gate Pass (project + trolley piece lists) before PDF download */
+  /** Preview Shipping List (project + trolley piece lists) before PDF download */
   async getGatePassPreview(params?: {
     date?: string
     projectId?: number
@@ -698,7 +855,7 @@ export const api = {
     return (await request<any>(`/reports/gate-pass/preview?${query.toString()}`)).data;
   },
 
-  /** Download Gate Pass PDF (one project per file) */
+  /** Download Shipping List PDF (one project per file) */
   async downloadGatePass(params?: {
     date?: string
     projectId?: number
@@ -721,13 +878,13 @@ export const api = {
     });
 
     if (!res.ok) {
-      throw new Error(`Failed to download Gate Pass (${res.status})`);
+      throw new Error(`Failed to download Shipping List (${res.status})`);
     }
 
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition') || '';
     const match = disposition.match(/filename="?([^"]+)"?/i);
-    const filename = match?.[1] || `GATE_PASS_${params?.date || new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = match?.[1] || `SHIPPING_LIST_${params?.date || new Date().toISOString().slice(0, 10)}.pdf`;
 
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

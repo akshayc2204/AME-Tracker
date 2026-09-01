@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
+import { itemToScheduleValues } from '../imports/item-schedule'
+import { unitToTrackingExportValues } from '../imports/tracking-export'
 
 @Injectable()
 export class ProductsService {
@@ -74,6 +76,125 @@ export class ProductsService {
 
     const items = units.map((unit) => this.mapUnit(unit))
     return { items, total, page, pageSize }
+  }
+
+  async listItemSchedule(jobCode?: string) {
+    const where: Record<string, unknown> = {}
+    if (jobCode) {
+      where.job = {
+        OR: [
+          { sourceJobId: jobCode },
+          { jobName: { contains: jobCode } },
+          { id: Number(jobCode) || undefined },
+        ],
+      }
+    }
+
+    const rows = await this.prisma.item.findMany({
+      where,
+      include: {
+        units: {
+          select: {
+            id: true,
+            qrCode: true,
+            currentStatus: true,
+            sourceItemTrackingId: true,
+            unitIndex: true,
+            updatedAt: true,
+            trackingDate: true,
+            trackingEvents: {
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+              select: { createdAt: true },
+            },
+          },
+          orderBy: { unitIndex: 'asc' },
+        },
+        job: { select: { id: true, sourceJobId: true, jobName: true } },
+      },
+      orderBy: [{ jobId: 'asc' }, { id: 'asc' }],
+    })
+
+    const items = rows.map((item) => {
+      const values = itemToScheduleValues(item)
+      const shipped = item.units.filter((u) => u.currentStatus === 'SHIPPED').length
+      const timestamps = item.units
+        .map((unit) => latestUnitTimestamp(unit))
+        .filter((ts): ts is string => Boolean(ts))
+        .sort()
+      return {
+        id: String(item.id),
+        jobId: String(item.jobId),
+        sourceItemId: item.sourceItemId,
+        values,
+        status: rollupUnitStatus(item.units.map((u) => u.currentStatus)),
+        trackingDateTime: timestamps.at(-1) ?? null,
+        shippedUnits: shipped,
+        pendingUnits: item.units.length - shipped,
+        trackingRecords: item.units.map((unit) => ({
+          id: `tr-${unit.id}`,
+          partId: String(item.id),
+          itemTracking: unit.sourceItemTrackingId != null ? String(unit.sourceItemTrackingId) : '',
+          qrCode: unit.qrCode,
+          status: unit.currentStatus,
+          trackingDateTime: latestUnitTimestamp(unit),
+        })),
+      }
+    })
+
+    return {
+      items,
+      total: items.length,
+      totalQty: items.reduce((sum, row) => sum + Number(row.values.Qty || 0), 0),
+    }
+  }
+
+  async listTrackingExport(jobCode?: string) {
+    const where: Record<string, unknown> = {
+      sourceItemTrackingId: { not: null },
+    }
+    if (jobCode) {
+      where.job = {
+        OR: [
+          { sourceJobId: jobCode },
+          { jobName: { contains: jobCode } },
+          { id: Number(jobCode) || undefined },
+        ],
+      }
+    }
+
+    const units = await this.prisma.itemUnit.findMany({
+      where,
+      include: {
+        item: {
+          select: {
+            sourceItemId: true,
+            pieceNumber: true,
+            fitting: true,
+            instructions: true,
+          },
+        },
+        job: { select: { sourceJobId: true, jobName: true } },
+        trackingEvents: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { createdAt: true },
+        },
+      },
+      orderBy: [{ jobId: 'asc' }, { sourceItemTrackingId: 'asc' }],
+    })
+
+    const items = units.map((unit) => ({
+      id: String(unit.id),
+      jobId: String(unit.jobId),
+      itemId: String(unit.itemId),
+      qrCode: unit.qrCode,
+      status: unit.currentStatus,
+      trackingDateTime: latestUnitTimestamp(unit),
+      values: unitToTrackingExportValues(unit),
+    }))
+
+    return { items, total: items.length }
   }
 
   async getById(id: string | number) {
@@ -227,6 +348,12 @@ export class ProductsService {
     location?: string | null
     container?: string | null
     inContainer?: number
+    pieceNbr?: string | null
+    fitting?: string | null
+    description?: string | null
+    scanDate?: string | null
+    component?: number | null
+    backOrdered?: string | null
     currentStatus: string
     updatedAt: Date
     item: {
@@ -311,22 +438,24 @@ export class ProductsService {
       unitIndex: unit.unitIndex,
       itemId: String(unit.item.sourceItemId),
       itemTracking,
-      fitting: unit.item.fitting || 'Standard Duct',
-      description: unit.item.dimensions
-        ? `${unit.item.fitting || ''} ${unit.item.dimensions}`.trim()
-        : unit.item.fitting || '',
+      fitting: unit.fitting || unit.item.fitting || 'Standard Duct',
+      description: unit.description
+        ? unit.description
+        : unit.item.dimensions
+          ? `${unit.item.fitting || ''} ${unit.item.dimensions}`.trim()
+          : unit.item.fitting || '',
       metal: unit.item.metal || '',
       gauge: unit.item.gauge || null,
       metricWeight: unit.item.metricWeight || 0,
-      component: 0,
-      scanDate: '',
+      component: unit.component ?? 0,
+      scanDate: unit.scanDate || '',
       location: unit.location ?? unit.item.location ?? '',
       storage: unit.storage ?? unit.item.storage ?? '',
       trackingStatus: unit.trackingStatus ?? unit.item.trackingStatus ?? '',
       inContainer: Boolean(unit.inContainer ?? unit.item.inContainer),
       containerName: unit.container ?? unit.item.container ?? '',
       statusSequence: unit.statusSequence ?? unit.item.statusSequence ?? 1,
-      backOrdered: unit.item.instructions || '',
+      backOrdered: unit.backOrdered || unit.item.instructions || '',
       // Trimble QtyItemGuids.GuidInUse — whether the sticker has been issued.
       sourceFlag: unit.guidInUse === 1,
       sourceFlagRaw: unit.guidInUse === 1 ? 'true' : 'false',
@@ -356,6 +485,7 @@ export class ProductsService {
           qrCode: unit.qrCode,
           fabshopDownloadNo: unit.sourceQtyGuidId != null ? String(unit.sourceQtyGuidId) : '',
           status: unit.currentStatus,
+          trackingDateTime: shippedAt,
           shippedAt,
           inContainer: Boolean(unit.inContainer ?? unit.item.inContainer),
           containerName: unit.container ?? unit.item.container ?? '',
@@ -387,4 +517,29 @@ export class ProductsService {
       },
     }
   }
+}
+
+function latestUnitTimestamp(unit: {
+  currentStatus: string
+  updatedAt: Date
+  trackingDate?: Date | null
+  trackingEvents?: Array<{ createdAt: Date }>
+}): string | null {
+  const eventAt = unit.trackingEvents?.[0]?.createdAt
+  if (eventAt) return eventAt.toISOString()
+  if (unit.trackingDate) return unit.trackingDate.toISOString()
+  if (unit.currentStatus && unit.currentStatus !== 'PENDING') {
+    return unit.updatedAt.toISOString()
+  }
+  return null
+}
+
+function rollupUnitStatus(statuses: string[]): string {
+  if (!statuses.length) return 'PENDING'
+  const unique = [...new Set(statuses)]
+  if (unique.length === 1) return unique[0]
+  if (statuses.some((s) => s === 'SHIPPED') && statuses.some((s) => s === 'PENDING')) {
+    return 'PARTIAL'
+  }
+  return unique.includes('SHIPPED') ? 'SHIPPED' : unique[0]
 }

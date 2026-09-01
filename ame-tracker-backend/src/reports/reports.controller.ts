@@ -112,7 +112,7 @@ export class ReportsController {
   }
 
   /**
-   * Previews Gate Pass rows (per project + trolley) before PDF download.
+   * Previews Shipping List rows (per project + trolley) before PDF download.
    */
   @Get('gate-pass/preview')
   async previewGatePass(
@@ -134,7 +134,7 @@ export class ReportsController {
   }
 
   /**
-   * Downloads Gate Pass PDF matching FabShop layout (+ Shipped Date/Time column).
+   * Downloads Shipping List PDF matching FabShop layout (+ Shipped Date/Time column).
    */
   @Get('gate-pass.pdf')
   async downloadGatePass(

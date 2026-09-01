@@ -1,29 +1,152 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   FolderKanban, Briefcase, Package, ChevronRight, ArrowLeft,
   Search, ChevronUp, ChevronDown, X, CheckCircle, Clock, Tag
 } from 'lucide-react';
 import type { Part, TrackingStatus } from '../data/mockData';
-import { api, resolveTrackEvent } from '../services/api';
+import { api } from '../services/api';
 import PartDrawer from '../components/PartDrawer';
 
-const STATUS_OPTIONS: { value: '' | TrackingStatus; label: string }[] = [
-  { value: '', label: 'All Statuses' },
-  { value: 'PENDING', label: 'Pending' },
-  { value: 'SHIPPED', label: 'Shipped' },
-];
+const ITEM_SCHEDULE_HEADERS = [
+  'Item',
+  '#',
+  'Metal',
+  'Liner and Insulation',
+  'Qty',
+  'Information',
+  'Area',
+  'Weight',
+  'Cost',
+  'Hours',
+  'Segmented',
+  'Alpha #',
+  'Drawing',
+  'Floor',
+  'System',
+  'Pressure',
+  'Change Order',
+  'User 1',
+  'User 2',
+  'Modified',
+  'Bad',
+  'Raw Weight',
+  'Raw Area',
+  'Instructions',
+  'Field Verify',
+  'Length',
+  'Joint 1',
+  'Joint 2',
+  'Joint 3',
+  'Joint 4',
+  'Seam',
+  'Throat Seam',
+  'Gore Seam',
+  'Holes',
+] as const;
 
-function StatusBadge({ status }: { status: TrackingStatus }) {
-  const cls = status === 'PENDING' ? 'badge-pending'
-    : status === 'SHIPPED' ? 'badge-shipped'
-    : 'badge-cancelled';
-  return <span className={`badge ${cls}`}><span className="badge-dot" />{status}</span>;
+const TRACKING_EXPORT_HEADERS = [
+  'ItemTracking',
+  'IDJob',
+  'ItemID',
+  'Fitting',
+  'PieceNbr',
+  'Description',
+  'SCANDATE',
+  'TrackingStatus',
+  'Component',
+  'Location',
+  'Storage',
+  'InContainer',
+  'ContainerName',
+  'StatusSequence',
+  'BackOrdered',
+] as const;
+
+const DATETIME_HEADER = 'Tracking Date/Time';
+const LIVE_STATUS_HEADERS = ['Status', DATETIME_HEADER] as const;
+const SCHEDULE_TABLE_HEADERS = [...LIVE_STATUS_HEADERS, ...ITEM_SCHEDULE_HEADERS] as const;
+const TRACKING_TABLE_HEADERS = [...LIVE_STATUS_HEADERS, ...TRACKING_EXPORT_HEADERS] as const;
+
+type ScheduleSortKey = (typeof SCHEDULE_TABLE_HEADERS)[number];
+type TrackingSortKey = (typeof TRACKING_TABLE_HEADERS)[number];
+type TableView = 'schedule' | 'tracking';
+
+const TRACKING_NONE_HEADERS = new Set<string>(['Description', 'TrackingStatus', 'BackOrdered']);
+const TRACKING_BOOL_HEADERS = new Set<string>(['Component', 'InContainer']);
+
+function scheduleCell(value: string | number | boolean | null | undefined): string {
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (Number.isInteger(value)) return String(value);
+    return String(Number(value.toFixed(4)));
+  }
+  return String(value);
+}
+
+function trackingCell(
+  header: TrackingSortKey,
+  value: string | number | boolean | null | undefined,
+): string {
+  if (header === DATETIME_HEADER) return formatTimestamp(value);
+  if (TRACKING_BOOL_HEADERS.has(header)) {
+    return value === true || value === 1 || value === 'True' || value === 'true' ? 'True' : 'False';
+  }
+  if (value === null || value === undefined || value === '') {
+    return TRACKING_NONE_HEADERS.has(header) ? 'None' : '—';
+  }
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  return String(value);
+}
+
+function formatTimestamp(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const s = (status || 'PENDING').toUpperCase();
+  const cls = s === 'SHIPPED' ? 'badge-shipped'
+    : s === 'LOADED' ? 'badge-loaded'
+    : s === 'PARTIAL' ? 'badge-partial'
+    : s === 'CANCELLED' ? 'badge-cancelled'
+    : 'badge-pending';
+  return <span className={`badge ${cls}`}><span className="badge-dot" />{s}</span>;
+}
+
+function compareSchedule(
+  a: string | number | boolean | null | undefined,
+  b: string | number | boolean | null | undefined,
+  dir: 'asc' | 'desc',
+): number {
+  const av = a ?? '';
+  const bv = b ?? '';
+  const an = typeof av === 'number' ? av : Number(String(av).replace(/[^\d.-]/g, ''));
+  const bn = typeof bv === 'number' ? bv : Number(String(bv).replace(/[^\d.-]/g, ''));
+  if (Number.isFinite(an) && Number.isFinite(bn) && String(av).match(/^-?\d/) && String(bv).match(/^-?\d/)) {
+    if (an !== bn) return dir === 'asc' ? an - bn : bn - an;
+    return dir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  }
+  const as = String(av).toLowerCase();
+  const bs = String(bv).toLowerCase();
+  if (as < bs) return dir === 'asc' ? -1 : 1;
+  if (as > bs) return dir === 'asc' ? 1 : -1;
+  return 0;
 }
 
 export default function Projects() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
+  // Import page disabled — jobs come from DataUploads folder sync
+  // const navigate = useNavigate();
 
   const [liveProjects, setLiveProjects] = useState<any[]>([]);
   const [liveJobs, setLiveJobs] = useState<any[]>([]);
@@ -91,142 +214,130 @@ export default function Projects() {
 
   // Level 3 (Parts) state
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'' | TrackingStatus>('');
-  const [fittingFilter, setFittingFilter] = useState('');
-  const [sortKey, setSortKey] = useState<'pieceNbr' | 'fitting' | 'status' | 'shippedAt' | 'trackEvent'>('status');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [itemFilter, setItemFilter] = useState('');
+  const [tableView, setTableView] = useState<TableView>('schedule');
+  const [sortKey, setSortKey] = useState<ScheduleSortKey>('#');
+  const [trackingSortKey, setTrackingSortKey] = useState<TrackingSortKey>('ItemTracking');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedPart, setSelectedPart] = useState<Part | null>(null);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 15;
   const [liveParts, setLiveParts] = useState<Part[]>([]);
+  const [liveTracking, setLiveTracking] = useState<Array<{
+    id: string;
+    status: string;
+    trackingDateTime: string | null;
+    values: Record<string, string | number | boolean | null>;
+  }>>([]);
 
   const selectedJobSourceId = selectedJob ? String(selectedJob.sourceJobId || selectedJob.id) : null;
 
   useEffect(() => {
     if (selectedJob && selectedJobSourceId) {
-      api.getProducts({ jobCode: selectedJobSourceId, pageSize: 500 })
+      api.getItemSchedule(selectedJobSourceId)
         .then((res) => {
           if (res?.items) {
-            const mapped: Part[] = res.items.map((item: any) => {
-              const trEvents = item.trackingRecords?.[0]?.events || item.trackingEvents || [];
-              const latestEvent = item.lastEvent || trEvents[0];
-              const eventTs = latestEvent?.timestamp || latestEvent?.createdAt;
-              const shippedAtVal = item.shippedAt || eventTs || (item.currentStatus === 'SHIPPED' ? item.updatedAt : null);
-              const trackEventVal = resolveTrackEvent(item, latestEvent);
-
+            const mapped: Part[] = res.items.map((item) => {
+              const values = item.values || {};
               return {
                 id: String(item.id),
                 jobId: selectedJob.id,
-                pieceNbr: item.pieceNo ?? item.pieceNumber,
-                fitting: item.fitting || 'Standard Duct',
-                itemId: item.itemId || '—',
-                description: item.description || '',
-                component: item.component,
-                information: item.description || item.location || '',
-                sourceFlag: Boolean(item.sourceFlag),
-                shippedAt: shippedAtVal || null,
-                trackEvent: trackEventVal,
-                scanEvent: trackEventVal,
-                lastEvent: latestEvent,
-                trackingRecords: item.trackingRecords?.length ? item.trackingRecords.map((tr: any) => ({
-                  ...tr,
-                  shippedAt: tr.shippedAt || shippedAtVal || null,
-                  trackEvent: trackEventVal,
-                  scanEvent: trackEventVal,
-                })) : [
-                  {
-                    id: `tr-${item.id}`,
-                    partId: String(item.id),
-                    itemTracking: item.itemTracking || '',
-                    qrCode: item.qrCode?.code || item.qrCodeStr || '—',
-                    status: (item.currentStatus || item.status || 'PENDING') as TrackingStatus,
-                    shippedAt: shippedAtVal || null,
-                    trackEvent: trackEventVal,
-                    scanEvent: trackEventVal,
-                    inContainer: Boolean(item.inContainer),
-                    statusSequence: item.statusSequence || 1,
-                    events: [],
-                  }
-                ]
+                pieceNbr: values['#'] ?? values['Alpha #'] ?? item.sourceItemId,
+                fitting: String(values.Item || '—'),
+                itemId: item.sourceItemId,
+                description: String(values.Information || ''),
+                metal: values.Metal != null ? String(values.Metal) : '',
+                information: values.Information != null ? String(values.Information) : '',
+                area: typeof values.Area === 'number' ? values.Area : undefined,
+                weight: typeof values.Weight === 'number' ? values.Weight : undefined,
+                status: (item.status || 'PENDING') as TrackingStatus,
+                trackingDateTime: item.trackingDateTime || null,
+                schedule: values,
+                trackingRecords: (item.trackingRecords || []).map((tr) => ({
+                  id: tr.id,
+                  partId: tr.partId,
+                  itemTracking: tr.itemTracking,
+                  qrCode: tr.qrCode,
+                  status: tr.status as TrackingStatus,
+                  trackingDateTime: tr.trackingDateTime || null,
+                })),
               };
             });
             setLiveParts(mapped);
           }
         })
         .catch(() => {});
+      api.getTrackingExport(selectedJobSourceId)
+        .then((res) => {
+          if (res?.items) {
+            setLiveTracking(res.items.map((row) => ({
+              id: String(row.id),
+              status: row.status || 'PENDING',
+              trackingDateTime: row.trackingDateTime || null,
+              values: row.values || {},
+            })));
+          }
+        })
+        .catch(() => setLiveTracking([]));
     } else {
       setLiveParts([]);
+      setLiveTracking([]);
     }
   }, [selectedJob?.id, selectedJobSourceId]);
 
   const jobParts = liveParts;
 
-  const fittings = useMemo(() => [...new Set(jobParts.map(p => p.fitting))].sort(), [jobParts]);
+  const itemNames = useMemo(
+    () => [...new Set(jobParts.map((p) => String(p.schedule?.Item || p.fitting)))].sort(),
+    [jobParts],
+  );
 
   const filteredParts = useMemo(() => {
-    return jobParts.filter(p => {
+    return jobParts.filter((p) => {
       const q = search.toLowerCase();
-      const matchSearch = !q || p.fitting.toLowerCase().includes(q) ||
-        p.pieceNbr.toString().includes(q) ||
-        (p.metal ?? '').toLowerCase().includes(q) ||
-        p.trackingRecords.some(tr =>
-          tr.qrCode.toLowerCase().includes(q) ||
-          (tr.itemTracking && tr.itemTracking.toLowerCase().includes(q))
+      const values = p.schedule || {};
+      const matchSearch = !q
+        || (p.status || '').toLowerCase().includes(q)
+        || formatTimestamp(p.trackingDateTime).toLowerCase().includes(q)
+        || ITEM_SCHEDULE_HEADERS.some((header) =>
+          scheduleCell(values[header]).toLowerCase().includes(q),
         );
-      const matchStatus = !statusFilter || p.trackingRecords.some(tr => tr.status === statusFilter);
-      const matchFitting = !fittingFilter || p.fitting === fittingFilter;
-      return matchSearch && matchStatus && matchFitting;
+      const matchItem = !itemFilter || String(values.Item || p.fitting) === itemFilter;
+      return matchSearch && matchItem;
     }).sort((a, b) => {
-      const isShippedA = a.trackingRecords.some(tr => tr.status === 'SHIPPED') || Boolean(a.shippedAt);
-      const isShippedB = b.trackingRecords.some(tr => tr.status === 'SHIPPED') || Boolean(b.shippedAt);
-
-      if (sortKey === 'status') {
-        if (isShippedA !== isShippedB) {
-          return sortDir === 'desc' ? (isShippedA ? -1 : 1) : (isShippedA ? 1 : -1);
-        }
-        if (isShippedA && isShippedB) {
-          const tsA = a.shippedAt ? new Date(a.shippedAt).getTime() : 0;
-          const tsB = b.shippedAt ? new Date(b.shippedAt).getTime() : 0;
-          if (tsA !== tsB) return tsB - tsA;
-        }
-        return (Number(a.pieceNbr) || 0) - (Number(b.pieceNbr) || 0);
-      }
-
-      if (sortKey === 'shippedAt') {
-        const tsA = a.shippedAt ? new Date(a.shippedAt).getTime() : 0;
-        const tsB = b.shippedAt ? new Date(b.shippedAt).getTime() : 0;
-        if (tsA !== tsB) {
-          if (sortDir === 'desc') {
-            if (tsA === 0) return 1;
-            if (tsB === 0) return -1;
-            return tsB - tsA;
-          } else {
-            if (tsA === 0) return 1;
-            if (tsB === 0) return -1;
-            return tsA - tsB;
-          }
-        }
-        return (Number(a.pieceNbr) || 0) - (Number(b.pieceNbr) || 0);
-      }
-
-      if (sortKey === 'pieceNbr') {
-        const nA = Number(a.pieceNbr) || 0;
-        const nB = Number(b.pieceNbr) || 0;
-        return sortDir === 'asc' ? nA - nB : nB - nA;
-      }
-
-      let av = (a[sortKey] ?? '') as number | string;
-      let bv = (b[sortKey] ?? '') as number | string;
-      if (typeof av === 'string') av = av.toLowerCase();
-      if (typeof bv === 'string') bv = bv.toLowerCase();
-      if (av < bv) return sortDir === 'asc' ? -1 : 1;
-      if (av > bv) return sortDir === 'asc' ? 1 : -1;
-      return (Number(a.pieceNbr) || 0) - (Number(b.pieceNbr) || 0);
+      if (sortKey === 'Status') return compareSchedule(a.status, b.status, sortDir);
+      if (sortKey === DATETIME_HEADER) return compareSchedule(a.trackingDateTime, b.trackingDateTime, sortDir);
+      return compareSchedule(a.schedule?.[sortKey], b.schedule?.[sortKey], sortDir);
     });
-  }, [jobParts, search, statusFilter, fittingFilter, sortKey, sortDir]);
+  }, [jobParts, search, itemFilter, sortKey, sortDir]);
 
-  const totalPages = Math.ceil(filteredParts.length / PAGE_SIZE);
+  const fittingNames = useMemo(
+    () => [...new Set(liveTracking.map((row) => String(row.values.Fitting || '')).filter(Boolean))].sort(),
+    [liveTracking],
+  );
+
+  const filteredTracking = useMemo(() => {
+    return liveTracking.filter((row) => {
+      const q = search.toLowerCase();
+      const matchSearch = !q
+        || (row.status || '').toLowerCase().includes(q)
+        || formatTimestamp(row.trackingDateTime).toLowerCase().includes(q)
+        || TRACKING_EXPORT_HEADERS.some((header) =>
+          trackingCell(header, row.values[header]).toLowerCase().includes(q),
+        );
+      const matchItem = !itemFilter || String(row.values.Fitting || '') === itemFilter;
+      return matchSearch && matchItem;
+    }).sort((a, b) => {
+      if (trackingSortKey === 'Status') return compareSchedule(a.status, b.status, sortDir);
+      if (trackingSortKey === DATETIME_HEADER) return compareSchedule(a.trackingDateTime, b.trackingDateTime, sortDir);
+      return compareSchedule(a.values[trackingSortKey], b.values[trackingSortKey], sortDir);
+    });
+  }, [liveTracking, search, itemFilter, trackingSortKey, sortDir]);
+
+  const activeRows = tableView === 'schedule' ? filteredParts : filteredTracking;
+  const totalPages = Math.ceil(activeRows.length / PAGE_SIZE);
   const paginatedParts = filteredParts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const paginatedTracking = filteredTracking.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   function selectProject(projId: string | null) {
     if (projId) {
@@ -235,10 +346,11 @@ export default function Projects() {
       setParams({});
     }
     setSearch('');
-    setStatusFilter('');
-    setFittingFilter('');
-    setSortKey('status');
-    setSortDir('desc');
+    setItemFilter('');
+    setSortKey('#');
+    setTrackingSortKey('ItemTracking');
+    setSortDir('asc');
+    setTableView('schedule');
     setPage(1);
   }
 
@@ -251,25 +363,49 @@ export default function Projects() {
       setParams({});
     }
     setSearch('');
-    setStatusFilter('');
-    setFittingFilter('');
-    setSortKey('status');
-    setSortDir('desc');
+    setItemFilter('');
+    setSortKey('#');
+    setTrackingSortKey('ItemTracking');
+    setSortDir('asc');
+    setTableView('schedule');
     setPage(1);
   }
 
-  function toggleSort(key: typeof sortKey) {
+  function toggleSort(key: ScheduleSortKey) {
     if (sortKey === key) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     } else {
       setSortKey(key);
-      setSortDir(key === 'status' || key === 'shippedAt' ? 'desc' : 'asc');
+      setSortDir('asc');
     }
     setPage(1);
   }
 
-  function SortIcon({ k }: { k: typeof sortKey }) {
+  function toggleTrackingSort(key: TrackingSortKey) {
+    if (trackingSortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setTrackingSortKey(key);
+      setSortDir('asc');
+    }
+    setPage(1);
+  }
+
+  function switchTableView(view: TableView) {
+    setTableView(view);
+    setSearch('');
+    setItemFilter('');
+    setSortDir('asc');
+    setPage(1);
+  }
+
+  function SortIcon({ k }: { k: ScheduleSortKey }) {
     if (sortKey !== k) return null;
+    return sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
+  }
+
+  function TrackingSortIcon({ k }: { k: TrackingSortKey }) {
+    if (trackingSortKey !== k) return null;
     return sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
   }
 
@@ -278,10 +414,11 @@ export default function Projects() {
     const allTracking = jobParts.flatMap(p => p.trackingRecords);
     const shipped = allTracking.filter(tr => tr.status === 'SHIPPED').length;
     const pending = allTracking.filter(tr => tr.status === 'PENDING').length;
+    const totalQty = jobParts.reduce((sum, p) => sum + Number(p.schedule?.Qty ?? 0), 0);
     const pct = allTracking.length ? Math.round((shipped / allTracking.length) * 100) : 0;
 
     return (
-      <>
+      <div className="job-detail-page">
         {/* Breadcrumbs Navigation */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 16, flexWrap: 'wrap' }}>
           <button
@@ -329,9 +466,9 @@ export default function Projects() {
           </div>
 
           {/* KPI row */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 18 }}>
+          <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginTop: 18, width: '100%', maxWidth: '100%' }}>
             {[
-              { icon: <Package size={16} />, label: 'Total Parts', value: allTracking.length, color: 'var(--slate-700)', bg: 'var(--slate-100)' },
+              { icon: <Package size={16} />, label: 'Total Parts', value: totalQty, color: 'var(--slate-700)', bg: 'var(--slate-100)' },
               { icon: <CheckCircle size={16} />, label: 'Shipped', value: shipped, color: 'var(--green-600)', bg: 'var(--green-50)' },
               { icon: <Clock size={16} />, label: 'Pending', value: pending, color: 'var(--amber-600)', bg: 'var(--amber-50)' },
               { icon: <Tag size={16} />, label: 'Progress', value: `${pct}%`, color: 'var(--green-700)', bg: 'var(--green-100)' },
@@ -358,122 +495,155 @@ export default function Projects() {
         {/* Parts Table Card */}
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Parts &amp; Tracking Records</div>
+            <div>
+              <div className="card-title">Parts &amp; Tracking Records</div>
+              <div className="card-subtitle">
+                {tableView === 'schedule'
+                  ? 'Item Schedule columns'
+                  : 'Tracking Export columns (one row per physical piece)'}
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{
+                display: 'flex',
+                background: 'var(--slate-100)',
+                borderRadius: 8,
+                padding: 2,
+              }}>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => switchTableView('schedule')}
+                  style={{
+                    background: tableView === 'schedule' ? '#fff' : 'transparent',
+                    boxShadow: tableView === 'schedule' ? '0 1px 2px rgba(15,23,42,0.08)' : 'none',
+                    color: tableView === 'schedule' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontWeight: 700,
+                    fontSize: 12,
+                  }}
+                >
+                  Item Schedule ({jobParts.length})
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => switchTableView('tracking')}
+                  style={{
+                    background: tableView === 'tracking' ? '#fff' : 'transparent',
+                    boxShadow: tableView === 'tracking' ? '0 1px 2px rgba(15,23,42,0.08)' : 'none',
+                    color: tableView === 'tracking' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontWeight: 700,
+                    fontSize: 12,
+                  }}
+                >
+                  Tracking Export ({liveTracking.length})
+                </button>
+              </div>
               <div className="topbar-search" style={{ flex: 'none' }}>
                 <Search size={13} />
                 <input
                   value={search}
                   onChange={e => { setSearch(e.target.value); setPage(1); }}
-                  placeholder="Search parts, tracking #…"
+                  placeholder={tableView === 'schedule' ? 'Search item schedule…' : 'Search tracking export…'}
                   style={{ width: 180 }}
                 />
                 {search && <button onClick={() => setSearch('')}><X size={13} /></button>}
               </div>
               <select
                 className="form-select"
-                style={{ width: 130, padding: '6px 10px', fontSize: 12 }}
-                value={statusFilter}
-                onChange={e => { setStatusFilter(e.target.value as any); setPage(1); }}
+                style={{ width: 170, padding: '6px 10px', fontSize: 12 }}
+                value={itemFilter}
+                onChange={e => { setItemFilter(e.target.value); setPage(1); }}
               >
-                {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              <select
-                className="form-select"
-                style={{ width: 150, padding: '6px 10px', fontSize: 12 }}
-                value={fittingFilter}
-                onChange={e => { setFittingFilter(e.target.value); setPage(1); }}
-              >
-                <option value="">All Fittings</option>
-                {fittings.map(f => <option key={f} value={f}>{f}</option>)}
+                <option value="">{tableView === 'schedule' ? 'All Items' : 'All Fittings'}</option>
+                {(tableView === 'schedule' ? itemNames : fittingNames).map(f => <option key={f} value={f}>{f}</option>)}
               </select>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {filteredParts.length} of {jobParts.length} parts
+                {tableView === 'schedule'
+                  ? `${filteredParts.length} of ${jobParts.length} rows`
+                  : `${filteredTracking.length} of ${liveTracking.length} rows`}
               </span>
             </div>
           </div>
 
           <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th onClick={() => toggleSort('pieceNbr')} style={{ cursor: 'pointer' }}>Piece # <SortIcon k="pieceNbr" /></th>
-                  <th onClick={() => toggleSort('fitting')} style={{ cursor: 'pointer' }}>Fitting <SortIcon k="fitting" /></th>
-                  <th>Item ID</th>
-                  <th>ItemTracking</th>
-                  <th>QR Code</th>
-                  <th>Boolean Flag</th>
-                  <th onClick={() => toggleSort('status')} style={{ cursor: 'pointer' }}>Status <SortIcon k="status" /></th>
-                  <th onClick={() => toggleSort('trackEvent')} style={{ cursor: 'pointer' }}>Track Event <SortIcon k="trackEvent" /></th>
-                  <th onClick={() => toggleSort('shippedAt')} style={{ cursor: 'pointer' }}>Shipped Timestamp <SortIcon k="shippedAt" /></th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedParts.map(part => {
-                  const dominant: TrackingStatus = part.trackingRecords.every(tr => tr.status === 'SHIPPED') ? 'SHIPPED'
-                    : part.trackingRecords.some(tr => tr.status === 'SHIPPED') ? 'SHIPPED'
-                    : 'PENDING';
-                  const primaryTR = part.trackingRecords[0];
-                  const itemTrackingVal = primaryTR?.itemTracking || '—';
-                  const qrCodeVal = primaryTR?.qrCode || '—';
-                  const trackEventVal = part.trackEvent || primaryTR?.trackEvent;
-                  const shippedTimestamp = part.shippedAt || primaryTR?.shippedAt;
-                  const shippedFormatted = shippedTimestamp
-                    ? new Date(shippedTimestamp).toLocaleString('en-GB', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                      })
-                    : '—';
-                  return (
+            {tableView === 'schedule' ? (
+              <table className="item-schedule-table">
+                <thead>
+                  <tr>
+                    {SCHEDULE_TABLE_HEADERS.map((header) => (
+                      <th
+                        key={header}
+                        onClick={() => toggleSort(header)}
+                        className={header === 'Status' || header === DATETIME_HEADER ? 'col-live' : undefined}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {header} <SortIcon k={header} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedParts.map(part => (
                     <tr key={part.id} onClick={() => setSelectedPart(part)} style={{ cursor: 'pointer' }}>
-                      <td className="td-mono" style={{ fontWeight: 700 }}>#{part.pieceNbr}</td>
-                      <td style={{ fontWeight: 500 }}>{part.fitting}</td>
-                      <td className="td-mono">{part.itemId}</td>
-                      <td>
-                        <span className="td-mono" style={{ fontSize: 11, color: 'var(--purple-700)', background: 'var(--purple-50)', padding: '2px 8px', borderRadius: 4, display: 'inline-block', fontWeight: 600 }} title={itemTrackingVal}>
-                          {itemTrackingVal}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="td-mono" style={{ fontSize: 10.5, color: 'var(--green-700)', background: 'var(--green-50)', padding: '2px 8px', borderRadius: 4, display: 'inline-block', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }} title={qrCodeVal}>
-                          {qrCodeVal}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`chip ${part.sourceFlag ? 'green' : 'slate'}`} style={{ fontSize: 10, padding: '2px 7px' }}>
-                          {part.sourceFlag ? 'TRUE' : 'FALSE'}
-                        </span>
-                      </td>
-                      <td><StatusBadge status={dominant} /></td>
-                      <td>
-                        {trackEventVal === 'Mobile scan' && (
-                          <span className="badge badge-active" style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', whiteSpace: 'nowrap' }}>
-                            Mobile scan
-                          </span>
-                        )}
-                        {trackEventVal === 'Portal scan' && (
-                          <span className="badge badge-pending" style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', background: 'var(--blue-50)', color: 'var(--blue-700)', borderColor: 'var(--blue-200)', whiteSpace: 'nowrap' }}>
-                            Portal scan
-                          </span>
-                        )}
-                        {!trackEventVal && (
-                          <span style={{ color: 'var(--text-muted)' }}>—</span>
-                        )}
-                      </td>
-                      <td>
-                        <span className="td-mono" style={{ fontSize: 11, color: shippedTimestamp ? 'var(--green-700)' : 'var(--text-muted)', fontWeight: shippedTimestamp ? 600 : 400, whiteSpace: 'nowrap' }}>
-                          {shippedFormatted}
-                        </span>
-                      </td>
+                      {SCHEDULE_TABLE_HEADERS.map((header) => (
+                        <td
+                          key={header}
+                          className={[
+                            header === '#' || header === 'Alpha #' ? 'td-mono' : '',
+                            header === 'Status' || header === DATETIME_HEADER ? 'col-live' : '',
+                          ].filter(Boolean).join(' ') || undefined}
+                          title={header === 'Status' ? part.status || 'PENDING' : header === DATETIME_HEADER ? formatTimestamp(part.trackingDateTime) : scheduleCell(part.schedule?.[header])}
+                        >
+                          {header === 'Status'
+                            ? <StatusBadge status={part.status || 'PENDING'} />
+                            : header === DATETIME_HEADER
+                              ? formatTimestamp(part.trackingDateTime)
+                              : scheduleCell(part.schedule?.[header])}
+                        </td>
+                      ))}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="item-schedule-table tracking-export-table">
+                <thead>
+                  <tr>
+                    {TRACKING_TABLE_HEADERS.map((header) => (
+                      <th
+                        key={header}
+                        onClick={() => toggleTrackingSort(header)}
+                        className={header === 'Status' || header === DATETIME_HEADER ? 'col-live' : undefined}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {header} <TrackingSortIcon k={header} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedTracking.map(row => (
+                    <tr key={row.id}>
+                      {TRACKING_TABLE_HEADERS.map((header) => (
+                        <td
+                          key={header}
+                          className={[
+                            header === 'ItemTracking' || header === 'PieceNbr' || header === 'ItemID' || header === DATETIME_HEADER ? 'td-mono' : '',
+                            header === 'Status' || header === DATETIME_HEADER ? 'col-live' : '',
+                          ].filter(Boolean).join(' ') || undefined}
+                          title={header === 'Status' ? row.status : header === DATETIME_HEADER ? formatTimestamp(row.trackingDateTime) : trackingCell(header, row.values[header])}
+                        >
+                          {header === 'Status'
+                            ? <StatusBadge status={row.status} />
+                            : header === DATETIME_HEADER
+                              ? formatTimestamp(row.trackingDateTime)
+                              : trackingCell(header, row.values[header])}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
 
           {totalPages > 1 && (
@@ -493,7 +663,7 @@ export default function Projects() {
             jobName={selectedJob?.jobName}
           />
         )}
-      </>
+      </div>
     );
   }
 
@@ -538,9 +708,11 @@ export default function Projects() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              {/* Import page disabled — jobs come from DataUploads folder sync
               <button className="btn btn-primary btn-sm" onClick={() => navigate('/import')}>
                 + Import Job
               </button>
+              */}
               <span className={`badge badge-${selectedProject.status.toLowerCase()}`} style={{ fontSize: 12, padding: '5px 12px' }}>
                 {selectedProject.status}
               </span>
@@ -634,11 +806,13 @@ export default function Projects() {
       <div className="page-header page-header-row">
         <div>
           <h2>Projects</h2>
-          <p>Select a manufacturing project to drill down into its jobs and parts</p>
+          <p>Open a project to view jobs and parts</p>
         </div>
+        {/* Import page disabled — jobs come from DataUploads folder sync
         <button className="btn btn-primary" onClick={() => navigate('/import')}>
           + Import Data
         </button>
+        */}
       </div>
 
       <div className="card">

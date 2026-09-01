@@ -52,6 +52,6 @@ Login with an ADMIN seed user (see root README).
 | **Projects** | Browse synced/imported jobs and parts |
 | **Manual Track** | Search unit / mark shipped from portal |
 | **Dispatch** | View transits created by mobile |
-| **Reports** | Dispatch log, gauge Excel, gate pass PDF |
+| **Reports** | Dispatch log, gauge Excel, shipping list PDF |
 
 Sync and upload are intentionally separate: sync on Dashboard, files on Import.

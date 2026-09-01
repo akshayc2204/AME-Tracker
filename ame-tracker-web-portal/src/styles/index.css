@@ -109,9 +109,9 @@ input, select, textarea { font-family: inherit; }
 ::-webkit-scrollbar-thumb:hover { background: var(--slate-400); }
 
 /* ─── Layout ─────────────────────────────────────────────────────────────────── */
-.app-layout { display: flex; min-height: 100vh; }
-.main-content { flex: 1; margin-left: var(--sidebar-w); display: flex; flex-direction: column; min-height: 100vh; }
-.page-content { flex: 1; padding: 28px; margin-top: var(--topbar-h); }
+.app-layout { display: flex; min-height: 100vh; overflow-x: hidden; }
+.main-content { flex: 1; margin-left: var(--sidebar-w); display: flex; flex-direction: column; min-height: 100vh; min-width: 0; overflow-x: hidden; }
+.page-content { flex: 1; padding: 28px; margin-top: var(--topbar-h); min-width: 0; max-width: 100%; overflow-x: hidden; }
 
 /* ─── Sidebar ────────────────────────────────────────────────────────────────── */
 .sidebar {
@@ -192,7 +192,7 @@ input, select, textarea { font-family: inherit; }
 }
 .sidebar-user-info { flex: 1; min-width: 0; }
 .sidebar-user-info strong { display: block; font-size: 12.5px; font-weight: 700; color: white; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.sidebar-user-info span { font-size: 10px; color: #d1fae5; font-weight: 600; text-transform: uppercase; }
+.sidebar-user-info span { font-size: 11px; color: rgba(255,255,255,0.62); font-weight: 500; text-transform: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
 
 /* ─── Top Bar ────────────────────────────────────────────────────────────────── */
 .topbar {
@@ -365,7 +365,7 @@ input, select, textarea { font-family: inherit; }
 .card-body { padding: 22px; }
 
 /* ─── Tables ─────────────────────────────────────────────────────────────────── */
-.table-wrapper { overflow-x: auto; }
+.table-wrapper { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 thead th {
   padding: 12px 16px;
@@ -387,6 +387,53 @@ tbody tr:last-child { border-bottom: none; }
 tbody tr:hover { background: #f0fdf4; transform: scale(1.001); }
 tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
 
+.job-detail-page {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+.job-detail-page .card-header {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.job-detail-page .table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.item-schedule-table {
+  min-width: 3100px;
+  width: max-content;
+}
+.item-schedule-table thead th {
+  padding: 8px 10px;
+  font-size: 10px;
+}
+.item-schedule-table tbody td {
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tracking-export-table {
+  min-width: 2040px;
+}
+.item-schedule-table thead th.col-live,
+.item-schedule-table tbody td.col-live {
+  background: #f0fdf4;
+}
+.item-schedule-table thead th.col-live {
+  color: #047857;
+}
+.item-schedule-table tbody td.col-live {
+  overflow: visible;
+  max-width: none;
+}
+
 /* Gauge report preview modal — don't inherit generic table header/body styles */
 .gauge-report-preview thead th {
   cursor: default;
@@ -400,8 +447,8 @@ tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
   transform: none;
 }
 
-/* Gate Pass preview — force readable headers (global thead th overrides inline styles) */
-.gate-pass-preview thead th {
+/* Shipping List preview — force readable headers (global thead th overrides inline styles) */
+.shipping-list-preview thead th {
   color: #0F172A !important;
   background: #FFFFFF !important;
   text-transform: none !important;
@@ -413,17 +460,17 @@ tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
   cursor: default;
   white-space: nowrap;
 }
-.gate-pass-preview thead th:hover {
+.shipping-list-preview thead th:hover {
   color: #0F172A !important;
 }
-.gate-pass-preview tbody tr {
+.shipping-list-preview tbody tr {
   cursor: default;
 }
-.gate-pass-preview tbody tr:hover {
+.shipping-list-preview tbody tr:hover {
   background: #F8FAFC !important;
   transform: none;
 }
-.gate-pass-preview tbody td {
+.shipping-list-preview tbody td {
   padding: 6px 8px !important;
   font-size: 12px !important;
   color: #111827 !important;
@@ -524,6 +571,11 @@ tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
   box-shadow: 0 0 0 3px rgba(7, 135, 16, 0.15);
 }
 .form-input::placeholder { color: var(--text-muted); }
+.form-input:disabled, .form-select:disabled {
+  background: var(--slate-50);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
 .form-hint { font-size: 11px; color: var(--text-muted); }
 .form-error { font-size: 11px; color: var(--red-600); }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -887,4 +939,142 @@ tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
 
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* ─── Admin page ─────────────────────────────────────────────────────────────── */
+.admin-page { display: flex; flex-direction: column; gap: 20px; }
+.admin-page .page-header { margin-bottom: 0; }
+.admin-page .card-header { flex-wrap: wrap; gap: 12px; }
+.admin-profile-card { max-width: 760px; }
+.admin-profile-view {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.admin-profile-avatar {
+  width: 52px;
+  height: 52px;
+  font-size: 16px;
+}
+.admin-profile-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 16px 24px;
+  flex: 1;
+  min-width: 0;
+}
+.admin-profile-value {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.admin-form-grid-span { grid-column: 1 / -1; }
+.admin-msg {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.admin-msg.is-error {
+  background: var(--red-50);
+  border: 1px solid #FECACA;
+  color: var(--red-700);
+}
+.admin-msg.is-success {
+  background: var(--green-50);
+  border: 1px solid #A7F3D0;
+  color: var(--green-700);
+}
+.admin-sync-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.admin-sync-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+.admin-sync-stat {
+  background: var(--slate-50);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.admin-sync-stat span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.admin-sync-stat strong {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+.admin-sync-stat.is-warn strong { color: var(--amber-600); }
+.admin-sync-stat.is-error strong { color: var(--red-600); }
+.admin-jobs-head {
+  padding: 16px 22px 12px;
+  border-top: 1px solid var(--border);
+}
+.admin-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.admin-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.admin-file-chip.is-ready {
+  background: var(--green-50);
+  color: var(--green-700);
+}
+.admin-file-chip.is-missing {
+  background: var(--slate-100);
+  color: var(--slate-500);
+}
+.admin-empty {
+  text-align: center;
+  padding: 36px 20px !important;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.admin-empty strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+@media (max-width: 720px) {
+  .admin-profile-fields,
+  .admin-form-grid {
+    grid-template-columns: 1fr;
+  }
 }

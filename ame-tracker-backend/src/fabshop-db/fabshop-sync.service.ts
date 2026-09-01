@@ -357,6 +357,12 @@ export class FabshopSyncService {
                   location: trk?.Location ?? null,
                   container: trk?.Container ?? null,
                   inContainer: trk?.InContainer ? 1 : 0,
+                  pieceNbr: trk?.PieceNumber ?? row.PieceNumber ?? null,
+                  fitting: row.Fitting ?? null,
+                  description: row.Instructions ?? null,
+                  scanDate: trk?.TrackingDate ? trk.TrackingDate.toISOString() : null,
+                  component: 0,
+                  backOrdered: row.Instructions ?? null,
                 }
 
                 await tx.itemUnit.upsert({

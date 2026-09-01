@@ -68,7 +68,6 @@ export default function LoginScreen() {
             onChangeText={setEmail}
             placeholder="operator@ametracker.local"
             placeholderTextColor="#9CA3AF"
-            color="#111827"
           />
           <Text style={styles.label}>Password</Text>
           <Text style={styles.hint}>Current password: Password123!</Text>
@@ -79,7 +78,6 @@ export default function LoginScreen() {
             onChangeText={setPassword}
             placeholder="Password"
             placeholderTextColor="#9CA3AF"
-            color="#111827"
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <TouchableOpacity

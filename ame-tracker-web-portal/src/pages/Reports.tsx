@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
-  Search, Download, RefreshCw, RotateCcw,
-  Calendar, Camera, X, ExternalLink, Radio
+  Search, Download, RotateCcw,
+  Calendar, Camera, X, ExternalLink,
 } from 'lucide-react';
 import { api, resolveTrackEvent, resolveVehiclePhotoUrl } from '../services/api';
 import { getSocket, type DashboardScanEvent } from '../services/socket';
@@ -462,7 +462,7 @@ export default function Reports() {
     projectSummary: Array<{ projectName: string; totalWeight: number }>;
   } | null>(null);
 
-  // Gate Pass preview + download
+  // Shipping List preview + download
   const [gatePassOpen, setGatePassOpen] = useState(false);
   const [gatePassLoading, setGatePassLoading] = useState(false);
   const [gatePassDownloading, setGatePassDownloading] = useState(false);
@@ -572,7 +572,7 @@ export default function Reports() {
       });
       setGatePassPreview(data);
     } catch (err: any) {
-      alert(err?.message || 'Failed to load Gate Pass preview');
+      alert(err?.message || 'Failed to load Shipping List preview');
       setGatePassOpen(false);
     } finally {
       setGatePassLoading(false);
@@ -589,7 +589,7 @@ export default function Reports() {
       projectNameOverride ??
       (!projectId && gatePassProject !== 'ALL' ? gatePassProject : undefined);
     if (!projectId && !projectName) {
-      alert('Select a project to download its Gate Pass PDF.');
+      alert('Select a project to download its Shipping List PDF.');
       return;
     }
 
@@ -604,7 +604,7 @@ export default function Reports() {
           (gatePassTrolley !== 'ALL' ? gatePassTrolley : undefined),
       });
     } catch (err: any) {
-      alert(err?.message || 'Failed to download Gate Pass');
+      alert(err?.message || 'Failed to download Shipping List');
     } finally {
       setGatePassDownloading(false);
     }
@@ -619,50 +619,11 @@ export default function Reports() {
             Dispatch &amp; Shipment Report
           </h2>
           <p style={{ fontSize: '0.8rem', color: '#6B7280', margin: '2px 0 0 0' }}>
-            Verified shipment logs by Project, Job, Vehicle, Piece, and Vulcan ItemTracking
+            Shipment logs by project, job, vehicle, and piece
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '4px 10px',
-              borderRadius: 99,
-              fontSize: '0.72rem',
-              fontWeight: 800,
-              background: '#ECFDF5',
-              color: '#047857',
-              border: '1px solid #A7F3D0',
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981', display: 'inline-block' }} />
-            Live Sync Active
-          </span>
-
-          <button
-            onClick={loadData}
-            title="Refresh"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '6px 12px',
-              borderRadius: 6,
-              border: '1px solid #E5E7EB',
-              background: '#FFFFFF',
-              color: '#374151',
-              fontSize: '0.8125rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            <span>Refresh</span>
-          </button>
-
           <button
             onClick={() => openGaugePreview()}
             style={{
@@ -706,7 +667,7 @@ export default function Reports() {
             }}
           >
             <Download size={14} />
-            <span>Gate Pass</span>
+            <span>Shipping List</span>
           </button>
 
           <button
@@ -1618,7 +1579,7 @@ export default function Reports() {
         </div>
       )}
 
-      {/* ─── Gate Pass Preview Modal ─── */}
+      {/* ─── Shipping List Preview Modal ─── */}
       {gatePassOpen && (
         <div
           onClick={() => setGatePassOpen(false)}
@@ -1660,10 +1621,10 @@ export default function Reports() {
             >
               <div>
                 <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>
-                  Gate Pass Preview
+                  Shipping List Preview
                 </div>
                 <div style={{ fontSize: '0.8rem', color: '#64748B', marginTop: 2 }}>
-                  AL MULLA AIR DUCT — GATE PASS
+                  AL MULLA AIR DUCT — SHIPPING LIST
                   {gatePassPreview ? ` · ${gatePassPreview.displayDate}` : ''}
                 </div>
               </div>
@@ -1696,7 +1657,7 @@ export default function Reports() {
                     color: '#374151',
                     maxWidth: 220,
                   }}
-                  title="Select a project to download its Gate Pass PDF"
+                  title="Select a project to download its Shipping List PDF"
                 >
                   <option value="ALL">All Projects (preview)</option>
                   {gatePassProjectOptions.map((p) => (
@@ -1742,7 +1703,7 @@ export default function Reports() {
                   title={
                     gatePassProject === 'ALL'
                       ? 'Select a project to download PDF'
-                      : 'Download Gate Pass PDF for selected project'
+                      : 'Download Shipping List PDF for selected project'
                   }
                   style={{
                     display: 'inline-flex',
@@ -1794,7 +1755,7 @@ export default function Reports() {
             <div style={{ padding: 16, overflow: 'auto', flex: 1, background: '#F8FAFC' }}>
               {gatePassLoading && (
                 <div style={{ textAlign: 'center', color: '#64748B', padding: 40 }}>
-                  Loading Gate Pass…
+                  Loading Shipping List…
                 </div>
               )}
 
@@ -1811,7 +1772,7 @@ export default function Reports() {
                     }}
                   >
                     <span>
-                      Passes:{' '}
+                      Lists:{' '}
                       <strong style={{ color: '#0F172A' }}>{gatePassPreview.passCount}</strong>
                     </span>
                     <span>
@@ -1849,7 +1810,7 @@ export default function Reports() {
                     gatePassPreview.passes.map((pass) => (
                       <div
                         key={`${pass.projectName}::${pass.trolley}`}
-                        className="gate-pass-preview"
+                        className="shipping-list-preview"
                         style={{
                           background: '#FFFFFF',
                           border: '1px solid #CBD5E1',
@@ -1880,7 +1841,7 @@ export default function Reports() {
                                 marginBottom: 10,
                               }}
                             >
-                              AL MULLA AIR DUCT - GATE PASS
+                              AL MULLA AIR DUCT - SHIPPING LIST
                             </div>
                           <div
                             style={{

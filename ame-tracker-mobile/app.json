@@ -18,7 +18,14 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-camera",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow AME QR Scanner to take photos and scan QR codes.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-image-picker",
       [
         "expo-splash-screen",
         {
@@ -38,11 +45,13 @@
     },
     "android": {
       "package": "com.amescanner.app",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#ffffff"
       },
       "permissions": [
+        "INTERNET",
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"

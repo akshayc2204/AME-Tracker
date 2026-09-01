@@ -5,7 +5,7 @@ import {
   ChevronRight, ArrowUpRight, RefreshCw,
   Truck, Smartphone, Monitor, Search,
   FolderKanban, Settings, Layers, Briefcase,
-  Calendar, ChevronDown, X,
+  Calendar, ChevronDown, X, FolderSync,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { getSocket, type DashboardScanEvent, type DashboardKpiEvent, type DashboardDispatchCompleteEvent } from '../services/socket';
@@ -98,6 +98,46 @@ function rangeLabel(preset: PresetId, from: Date, to: Date) {
   if (preset === 'yesterday') return 'Yesterday';
   if (preset === 'specific') return formatDateLabel(from);
   return `${formatDateLabel(from)} – ${formatDateLabel(to)}`;
+}
+
+type FolderPair = {
+  pairKey: string;
+  t4vjobFile: string | null;
+  xlsxFile: string | null;
+  sourceJobId: string | null;
+  jobName: string | null;
+  status: 'PENDING' | 'SYNCED' | 'SKIPPED' | 'FAILED' | 'INCOMPLETE';
+  itemsImported: number;
+  unitsImported: number;
+  message: string | null;
+  lastSyncedAt: string | null;
+};
+
+type FolderSyncStatus = {
+  enabled: boolean;
+  folderPath: string;
+  intervalMinutes: number;
+  running: boolean;
+  lastRun: {
+    reason?: string;
+    scannedPairs?: number;
+    imported: number;
+    skipped: number;
+    failed: number;
+    incomplete: number;
+    startedAt?: string;
+    finishedAt: string;
+  } | null;
+  pairs: FolderPair[];
+  error?: string;
+};
+
+function folderPairTone(status: FolderPair['status']) {
+  if (status === 'SYNCED') return { bg: '#F0FDF4', border: '#86EFAC', color: '#15803D' };
+  if (status === 'SKIPPED') return { bg: '#FFFBEB', border: '#FDE68A', color: '#B45309' };
+  if (status === 'FAILED') return { bg: '#FEF2F2', border: '#FECACA', color: '#B91C1C' };
+  if (status === 'INCOMPLETE') return { bg: '#EFF6FF', border: '#BFDBFE', color: '#1D4ED8' };
+  return { bg: '#F5F3FF', border: '#DDD6FE', color: '#5B21B6' };
 }
 
 // ─── Misc helpers ─────────────────────────────────────────────────────────────
@@ -450,164 +490,43 @@ export default function Dashboard() {
   const [socketToast, setSocketToast] = useState<{ message: string; type: 'scan' | 'complete' } | null>(null);
   const [newScanIds, setNewScanIds] = useState<Set<string | number>>(new Set());
 
-  // ── FabShop Sync state ──────────────────────────────────────────────────
-  const [syncModalOpen, setSyncModalOpen] = useState(false);
-  const [fabshopConnected, setFabshopConnected] = useState(false);
-  const [syncableJobs, setSyncableJobs] = useState<any[]>([]);
-  const [syncSearch, setSyncSearch] = useState('');
-  const [syncJobsLoading, setSyncJobsLoading] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [expandedProjects, setExpandedProjects] = useState<Set<number>>(new Set());
+  // ── Folder sync (DataUploads .t4vjob + .xlsx pairs) ─────────────────────
+  const [folderModalOpen, setFolderModalOpen] = useState(false);
+  const [folderStatus, setFolderStatus] = useState<FolderSyncStatus | null>(null);
+  const [folderSyncing, setFolderSyncing] = useState(false);
+  const [folderSyncError, setFolderSyncError] = useState<string | null>(null);
 
-  // Multi-select + batch progress
-  const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(new Set());
-  type JobSyncStatus =
-    | { status: 'queued';  jobName: string; projectName: string }
-    | { status: 'syncing'; jobName: string; projectName: string }
-    | { status: 'done';    jobName: string; projectName: string; result: any }
-    | { status: 'error';   jobName: string; projectName: string; error: string };
-  const [batchProgress, setBatchProgress] = useState<Map<number, JobSyncStatus>>(new Map());
-  const [isBatchRunning, setIsBatchRunning] = useState(false);
-  const [batchDone, setBatchDone] = useState(false);
-
-  // Check FabShop connection status on mount
-  useEffect(() => {
-    api.getFabshopStatus()
-      .then(s => setFabshopConnected(s.connected))
-      .catch(() => setFabshopConnected(false));
-  }, []);
-
-  // Compute Project-wise grouped jobs
-  const projectGroups = useMemo(() => {
-    const map = new Map<number, { IDProject: number; ProjectName: string; jobs: any[] }>();
-    const q = syncSearch.toLowerCase().trim();
-
-    for (const job of syncableJobs) {
-      const matches =
-        !q ||
-        job.JobName?.toLowerCase().includes(q) ||
-        String(job.IDJob).includes(q) ||
-        job.ProjectName?.toLowerCase().includes(q);
-
-      if (!matches) continue;
-
-      const pId = job.IDProject || 0;
-      if (!map.has(pId)) {
-        map.set(pId, {
-          IDProject: pId,
-          ProjectName: job.ProjectName || 'General Project',
-          jobs: [],
-        });
-      }
-      map.get(pId)!.jobs.push(job);
-    }
-
-    return Array.from(map.values()).sort((a, b) => a.ProjectName.localeCompare(b.ProjectName));
-  }, [syncableJobs, syncSearch]);
-
-  function toggleProjectExpand(idProject: number) {
-    setExpandedProjects(prev => {
-      const next = new Set(prev);
-      if (next.has(idProject)) next.delete(idProject);
-      else next.add(idProject);
-      return next;
-    });
-  }
-
-  function expandAllProjects() {
-    setExpandedProjects(new Set(projectGroups.map(p => p.IDProject)));
-  }
-
-  function collapseAllProjects() {
-    setExpandedProjects(new Set());
-  }
-
-  async function openSyncModal() {
-    setSyncModalOpen(true);
-    setSyncError(null);
-    setSyncSearch('');
-    setSelectedJobIds(new Set());
-    setBatchProgress(new Map());
-    setIsBatchRunning(false);
-    setBatchDone(false);
-    setSyncJobsLoading(true);
+  async function loadFolderStatus() {
     try {
-      const [status, jobs] = await Promise.all([
-        api.getFabshopStatus().catch(() => null),
-        api.getFabshopSyncableJobs(),
-      ]);
-      if (status) setFabshopConnected(Boolean(status.connected));
-      const list = Array.isArray(jobs) ? jobs : [];
-      setSyncableJobs(list);
-      setExpandedProjects(new Set(list.map((j: any) => j.IDProject as number)));
+      const res = await api.getFolderSyncStatus();
+      if (res) setFolderStatus(res as FolderSyncStatus);
+    } catch {
+      /* keep previous */
+    }
+  }
+
+  async function runFolderSyncNow() {
+    if (folderSyncing) return;
+    setFolderModalOpen(true);
+    setFolderSyncError(null);
+    setFolderSyncing(true);
+    try {
+      await loadFolderStatus();
+      await api.runFolderSync();
+      await loadFolderStatus();
+      loadDashboard(filterFrom, filterTo);
     } catch (e: any) {
-      setFabshopConnected(false);
-      setSyncError(e?.message || 'Failed to load jobs from TrimbleFabShop. Please ensure SQL Server is running.');
+      setFolderSyncError(e?.message || 'Folder sync failed. Check that the DataUploads folder is reachable.');
+      await loadFolderStatus();
     } finally {
-      setSyncJobsLoading(false);
+      setFolderSyncing(false);
     }
   }
 
-  function closeSyncModal() {
-    if (isBatchRunning) return;
-    setSyncModalOpen(false);
-    setSyncSearch('');
-    setSyncError(null);
-    setSelectedJobIds(new Set());
-    setBatchProgress(new Map());
-    setIsBatchRunning(false);
-    setBatchDone(false);
-  }
-
-  function toggleJobSelection(idJob: number) {
-    setSelectedJobIds(prev => {
-      const next = new Set(prev);
-      if (next.has(idJob)) next.delete(idJob); else next.add(idJob);
-      return next;
-    });
-  }
-
-  function toggleProjectSelection(group: typeof projectGroups[0]) {
-    const allSelected = group.jobs.every((j: any) => selectedJobIds.has(j.IDJob));
-    setSelectedJobIds(prev => {
-      const next = new Set(prev);
-      if (allSelected) group.jobs.forEach((j: any) => next.delete(j.IDJob));
-      else group.jobs.forEach((j: any) => next.add(j.IDJob));
-      return next;
-    });
-  }
-
-  function selectAllVisibleJobs() {
-    const visible = projectGroups.flatMap((g: any) => g.jobs);
-    setSelectedJobIds(new Set(visible.map((j: any) => j.IDJob)));
-  }
-
-  function clearAllJobs() { setSelectedJobIds(new Set()); }
-
-  async function runBatchSync() {
-    if (selectedJobIds.size === 0 || isBatchRunning) return;
-    const jobList = syncableJobs.filter((j: any) => selectedJobIds.has(j.IDJob));
-    if (jobList.length === 0) return;
-
-    setIsBatchRunning(true);
-    setBatchDone(false);
-    setBatchProgress(new Map(
-      jobList.map((j: any) => [j.IDJob, { status: 'queued' as const, jobName: j.JobName, projectName: j.ProjectName }])
-    ));
-
-    for (const job of jobList) {
-      setBatchProgress(prev => { const n = new Map(prev); n.set(job.IDJob, { ...n.get(job.IDJob)!, status: 'syncing' }); return n; });
-      try {
-        const result = await api.syncFromFabshop(job.IDJob);
-        setBatchProgress(prev => { const n = new Map(prev); n.set(job.IDJob, { ...n.get(job.IDJob)!, status: 'done', result }); return n; });
-      } catch (e: any) {
-        setBatchProgress(prev => { const n = new Map(prev); n.set(job.IDJob, { ...n.get(job.IDJob)!, status: 'error', error: e?.message || 'Sync failed' }); return n; });
-      }
-    }
-
-    setIsBatchRunning(false);
-    setBatchDone(true);
-    loadDashboard(filterFrom, filterTo);
+  function closeFolderModal() {
+    if (folderSyncing) return;
+    setFolderModalOpen(false);
+    setFolderSyncError(null);
   }
 
   async function loadDashboard(from: Date, to: Date) {
@@ -724,7 +643,7 @@ export default function Dashboard() {
     {
       label: 'Active Projects',
       value: totalProjects,
-      sub: 'Active project sites',
+      sub: '',
       icon: <Layers size={20} />,
       color: '#1D4ED8',
       bg: '#EFF6FF',
@@ -733,7 +652,7 @@ export default function Dashboard() {
     {
       label: 'Active Jobs',
       value: totalJobs,
-      sub: 'Fabrication jobs in shop',
+      sub: '',
       icon: <Briefcase size={20} />,
       color: '#6D28D9',
       bg: '#F5F3FF',
@@ -742,7 +661,7 @@ export default function Dashboard() {
     {
       label: 'Total Parts',
       value: total,
-      sub: 'All parts in system',
+      sub: '',
       icon: <Package size={20} />,
       color: 'var(--slate-700)',
       bg: 'var(--slate-100)',
@@ -751,7 +670,7 @@ export default function Dashboard() {
     {
       label: 'Shipped Parts',
       value: shipped,
-      sub: `${shippedPct}% completed & dispatched`,
+      sub: `${shippedPct}% shipped`,
       icon: <CheckCircle size={20} />,
       color: 'var(--green-700)',
       bg: 'var(--green-50)',
@@ -760,7 +679,7 @@ export default function Dashboard() {
     {
       label: 'Pending Parts',
       value: pending,
-      sub: 'Awaiting truck loading',
+      sub: '',
       icon: <Clock size={20} />,
       color: 'var(--amber-700)',
       bg: 'var(--amber-50)',
@@ -805,42 +724,36 @@ export default function Dashboard() {
       {/* ─── Page Header ─── */}
       <div className="page-header-row" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.02em' }}>
-              Operations Overview
-            </h2>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => loadDashboard(filterFrom, filterTo)}
-              title="Refresh live data"
-              style={{ color: 'var(--text-muted)' }}
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.02em' }}>
+            Operations Overview
+          </h2>
           <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            Live real-time monitoring of duct fabrication, loading dispatches, and QR track events
+            Projects, jobs, shipments, and tracking
           </p>
         </div>
-        {/* ─── Sync from FabShop button ─── */}
+        {/* ─── Sync from DataUploads folder ─── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
-            id="btn-sync-fabshop"
-            onClick={openSyncModal}
+            id="btn-sync-folder"
+            onClick={runFolderSyncNow}
+            disabled={folderSyncing}
+            title="Check DataUploads for new .t4vjob / .xlsx pairs"
             style={{
               display: 'flex', alignItems: 'center', gap: 7,
               padding: '8px 16px', borderRadius: 10,
               border: '1.5px solid #7C3AED',
               background: 'linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%)',
               color: '#FFFFFF', fontSize: '0.82rem', fontWeight: 700,
-              cursor: 'pointer', boxShadow: '0 2px 8px rgba(124,58,237,0.25)',
+              cursor: folderSyncing ? 'wait' : 'pointer',
+              boxShadow: '0 2px 8px rgba(124,58,237,0.25)',
               transition: 'all 0.2s ease',
+              opacity: folderSyncing ? 0.85 : 1,
             }}
-            onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 4px 16px rgba(124,58,237,0.4)')}
+            onMouseEnter={e => { if (!folderSyncing) e.currentTarget.style.boxShadow = '0 4px 16px rgba(124,58,237,0.4)'; }}
             onMouseLeave={e => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(124,58,237,0.25)')}
           >
-            <RefreshCw size={13} />
-            Sync from FabShop DB
+            <FolderSync size={13} style={folderSyncing ? { animation: 'spin 1s linear infinite' } : undefined} />
+            {folderSyncing ? 'Checking folder…' : 'Sync from folder'}
           </button>
         </div>
       </div>
@@ -898,9 +811,11 @@ export default function Dashboard() {
             <div className="kpi-value" style={{ color: c.color }}>
               {c.value.toLocaleString()}
             </div>
-            <div className="kpi-sub">
-              {c.sub}
-            </div>
+            {c.sub ? (
+              <div className="kpi-sub">
+                {c.sub}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
@@ -925,25 +840,11 @@ export default function Dashboard() {
               <Activity size={20} />
             </div>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>
-                  Live Tracking Stream
-                </h3>
-                <span
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                    backgroundColor: '#ECFDF5', color: '#047857',
-                    border: '1px solid #A7F3D0',
-                    padding: '2px 8px', borderRadius: 12,
-                    fontSize: '0.7rem', fontWeight: 800,
-                  }}
-                >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#078710' }} className="animate-pulse" />
-                  REAL-TIME ({filteredEvents.length})
-                </span>
-              </div>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>
+                Tracking
+              </h3>
               <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#6B7280' }}>
-                Structured logs of mobile barcode scans and portal loading events · <span style={{ color: '#1D4ED8', fontWeight: 600 }}>{rangeDisplayLabel}</span>
+                Recent scans · <span style={{ color: '#1D4ED8', fontWeight: 600 }}>{rangeDisplayLabel}</span>
               </p>
             </div>
           </div>
@@ -1136,8 +1037,7 @@ export default function Dashboard() {
       <div className="card" style={{ border: '1px solid #E5E7EB', borderRadius: 12, overflow: 'hidden' }}>
         <div className="card-header" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <div className="card-title" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>Active Fabrication Jobs</div>
-            <div className="card-subtitle" style={{ fontSize: '0.78rem', color: '#6B7280', marginTop: 2 }}>Imported fabrication jobs and part progress</div>
+            <div className="card-title" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>Jobs</div>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={() => navigate('/projects')} style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
             View All Projects <ChevronRight size={14} />
@@ -1158,7 +1058,7 @@ export default function Dashboard() {
               {liveJobs.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
-                    No jobs yet. Sync from FabShop DB above, or upload files on the Import page.
+                    No jobs yet. Sync from the DataUploads folder above.
                   </td>
                 </tr>
               ) : (
@@ -1195,17 +1095,22 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ─── FabShop Sync Modal ─── */}
-      {syncModalOpen && (() => {
-        const doneCount = Array.from(batchProgress.values()).filter(v => v.status === 'done').length;
-        const errorCount = Array.from(batchProgress.values()).filter(v => v.status === 'error').length;
-        const syncingIdx = Array.from(batchProgress.values()).findIndex(v => v.status === 'syncing');
-        const totalBatch = batchProgress.size;
+      {/* ─── Folder Sync Modal ─── */}
+      {folderModalOpen && (() => {
+        const pairs = folderStatus?.pairs ?? [];
+        const lastRun = folderStatus?.lastRun;
+        const interval = folderStatus?.intervalMinutes ?? 5;
+        const folderPath = folderStatus?.folderPath || '/Users/mangeshkharat/DataUploads';
+        const imported = lastRun?.imported ?? 0;
+        const skipped = lastRun?.skipped ?? 0;
+        const failed = lastRun?.failed ?? 0;
+        const incomplete = lastRun?.incomplete ?? 0;
+        const done = !folderSyncing && Boolean(lastRun || folderSyncError);
 
         return (
           <div
-            id="fabshop-sync-modal-overlay"
-            onClick={(e) => { if (e.target === e.currentTarget && !isBatchRunning) closeSyncModal(); }}
+            id="folder-sync-modal-overlay"
+            onClick={(e) => { if (e.target === e.currentTarget && !folderSyncing) closeFolderModal(); }}
             style={{
               position: 'fixed', inset: 0, zIndex: 10000,
               background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
@@ -1216,11 +1121,10 @@ export default function Dashboard() {
             <div style={{
               background: '#FFFFFF', borderRadius: 20,
               boxShadow: '0 25px 80px rgba(0,0,0,0.25)',
-              width: '100%', maxWidth: 600,
+              width: '100%', maxWidth: 560,
               maxHeight: '92vh',
               display: 'flex', flexDirection: 'column',
             }}>
-              {/* ── Modal Header ── */}
               <div style={{
                 padding: '20px 24px 16px',
                 borderBottom: '1px solid #F3F4F6',
@@ -1230,425 +1134,164 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: 10,
-                    background: isBatchRunning
+                    background: folderSyncing
                       ? 'linear-gradient(135deg, #D97706, #B45309)'
-                      : batchDone
-                        ? 'linear-gradient(135deg, #059669, #047857)'
+                      : folderSyncError
+                        ? 'linear-gradient(135deg, #DC2626, #B91C1C)'
                         : 'linear-gradient(135deg, #7C3AED, #5B21B6)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
-                    <RefreshCw size={16} color="#FFFFFF" style={isBatchRunning ? { animation: 'spin 1s linear infinite' } : {}} />
+                    <FolderSync size={16} color="#FFFFFF" style={folderSyncing ? { animation: 'spin 1s linear infinite' } : {}} />
                   </div>
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#111827' }}>
-                        {batchDone ? 'Batch Sync Complete' : isBatchRunning ? 'Syncing Jobs…' : 'Sync from FabShop DB'}
-                      </h3>
-                      <span style={{
-                        fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: 99,
-                        background: fabshopConnected ? '#ECFDF5' : '#FEF3C7',
-                        color: fabshopConnected ? '#047857' : '#B45309',
-                        border: `1px solid ${fabshopConnected ? '#A7F3D0' : '#FDE68A'}`,
-                      }}>
-                        {fabshopConnected ? '● Online' : '○ Connecting'}
-                      </span>
-                    </div>
+                    <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#111827' }}>
+                      {folderSyncing ? 'Checking folder…' : folderSyncError ? 'Folder sync failed' : 'Folder sync'}
+                    </h3>
                     <p style={{ margin: '3px 0 0', fontSize: '0.75rem', color: '#6B7280' }}>
-                      {batchDone
-                        ? `${doneCount} synced · ${errorCount} failed · ${totalBatch} total`
-                        : isBatchRunning
-                          ? `${doneCount + errorCount} of ${totalBatch} complete`
-                          : 'Select one or more jobs — large jobs sync in optimised chunks'}
+                      Watches {folderPath} every {interval} minutes for new .t4vjob + .xlsx pairs
                     </p>
                   </div>
                 </div>
                 <button
-                  onClick={closeSyncModal}
-                  disabled={isBatchRunning}
+                  onClick={closeFolderModal}
+                  disabled={folderSyncing}
                   style={{
-                    background: 'none', border: 'none', cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                    background: 'none', border: 'none', cursor: folderSyncing ? 'not-allowed' : 'pointer',
                     color: '#9CA3AF', padding: 6, borderRadius: 8,
-                    opacity: isBatchRunning ? 0.3 : 1, flexShrink: 0,
+                    opacity: folderSyncing ? 0.3 : 1, flexShrink: 0,
                   }}
                 >
                   <X size={18} />
                 </button>
               </div>
 
-              {/* ── Batch Progress / Results View ── */}
-              {(isBatchRunning || batchDone) && (
-                <>
-                  {/* Overall progress bar */}
-                  {isBatchRunning && (
-                    <div style={{ padding: '10px 24px 0', flexShrink: 0 }}>
-                      <div style={{ height: 6, background: '#E5E7EB', borderRadius: 99, overflow: 'hidden' }}>
-                        <div style={{
-                          height: '100%', borderRadius: 99,
-                          background: 'linear-gradient(90deg, #7C3AED, #5B21B6)',
-                          width: `${totalBatch > 0 ? Math.round(((doneCount + errorCount) / totalBatch) * 100) : 0}%`,
-                          transition: 'width 0.4s ease',
-                        }} />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Per-job status list */}
-                  <div style={{ overflowY: 'auto', flex: 1, padding: '12px 24px' }}>
-                    {Array.from(batchProgress.entries()).map(([idJob, entry]) => {
-                      const isDone = entry.status === 'done';
-                      const isErr = entry.status === 'error';
-                      const isSyncing = entry.status === 'syncing';
-                      const result = isDone ? (entry as any).result : null;
-                      return (
-                        <div key={idJob} style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 11,
-                          padding: '9px 12px', marginBottom: 6,
-                          borderRadius: 10,
-                          background: isDone ? '#F0FDF4' : isErr ? '#FEF2F2' : isSyncing ? '#F5F3FF' : '#F9FAFB',
-                          border: `1px solid ${isDone ? '#86EFAC' : isErr ? '#FECACA' : isSyncing ? '#DDD6FE' : '#E5E7EB'}`,
-                        }}>
-                          {/* Status icon */}
-                          <div style={{ flexShrink: 0, marginTop: 1 }}>
-                            {isSyncing && <RefreshCw size={14} color="#7C3AED" style={{ animation: 'spin 1s linear infinite' }} />}
-                            {isDone && <CheckCircle size={14} color="#16A34A" />}
-                            {isErr && <span style={{ fontSize: '0.8rem' }}>✗</span>}
-                            {entry.status === 'queued' && <span style={{ fontSize: '0.8rem', color: '#9CA3AF' }}>○</span>}
-                          </div>
-                          {/* Job info */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{
-                              fontWeight: 700, fontSize: '0.82rem',
-                              color: isDone ? '#15803D' : isErr ? '#B91C1C' : isSyncing ? '#5B21B6' : '#6B7280',
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            }}>
-                              {entry.jobName}
-                            </div>
-                            <div style={{ fontSize: '0.71rem', color: '#9CA3AF' }}>{entry.projectName} · #{idJob}</div>
-                            {isDone && result && (
-                              <div style={{ fontSize: '0.7rem', color: '#374151', marginTop: 3 }}>
-                                {(result.itemsInserted ?? 0).toLocaleString()} inserted · {(result.itemsUpdated ?? 0).toLocaleString()} updated ·{' '}
-                                {((result.durationMs ?? 0) / 1000).toFixed(1)}s
-                                {result.errors?.length > 0 && <span style={{ color: '#D97706' }}> · {result.errors.length} warnings</span>}
-                              </div>
-                            )}
-                            {isErr && (
-                              <div style={{ fontSize: '0.7rem', color: '#B91C1C', marginTop: 3 }}>
-                                {(entry as any).error}
-                              </div>
-                            )}
-                            {isSyncing && (
-                              <div style={{ fontSize: '0.7rem', color: '#7C3AED', marginTop: 3 }}>
-                                Syncing — may take a minute for large jobs…
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+              {folderSyncing && (
+                <div style={{ padding: '28px 24px', textAlign: 'center', color: '#6B7280' }}>
+                  <RefreshCw size={22} color="#7C3AED" style={{ animation: 'spin 1s linear infinite', marginBottom: 10 }} />
+                  <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>Looking for new files</div>
+                  <div style={{ fontSize: '0.78rem', marginTop: 4 }}>
+                    Already-imported jobs are skipped. New matching pairs are imported into the item schedule.
                   </div>
-
-                  {/* Done footer */}
-                  {batchDone && (
-                    <div style={{
-                      padding: '14px 24px', borderTop: '1px solid #F3F4F6',
-                      display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0,
-                    }}>
-                      <button
-                        onClick={() => { setBatchDone(false); setBatchProgress(new Map()); setSelectedJobIds(new Set()); setSyncSearch(''); }}
-                        style={{
-                          padding: '9px 18px', borderRadius: 9, border: '1.5px solid #E5E7EB',
-                          background: '#FFFFFF', color: '#374151', fontSize: '0.82rem',
-                          fontWeight: 600, cursor: 'pointer',
-                        }}
-                      >
-                        Sync More Jobs
-                      </button>
-                      <button
-                        onClick={closeSyncModal}
-                        style={{
-                          padding: '9px 22px', borderRadius: 9, border: 'none',
-                          background: 'linear-gradient(135deg, #059669, #047857)',
-                          color: '#FFFFFF', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
-                          display: 'flex', alignItems: 'center', gap: 6,
-                        }}
-                      >
-                        <CheckCircle size={13} /> Done
-                      </button>
-                    </div>
-                  )}
-                </>
+                </div>
               )}
 
-              {/* ── Selection View ── */}
-              {!isBatchRunning && !batchDone && (
+              {!folderSyncing && (
                 <>
-                  <div style={{ padding: '16px 24px 0', flexShrink: 0 }}>
-                    {/* Search */}
-                    <div style={{ position: 'relative', marginBottom: 12 }}>
-                      <Search size={14} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
-                      <input
-                        id="sync-job-search"
-                        type="text"
-                        placeholder="Search job name, project…"
-                        value={syncSearch}
-                        onChange={e => setSyncSearch(e.target.value)}
-                        style={{
-                          width: '100%', padding: '8px 10px 8px 34px',
-                          borderRadius: 9, border: '1.5px solid #E5E7EB',
-                          fontSize: '0.82rem', color: '#111827', outline: 'none',
-                          boxSizing: 'border-box', background: '#F9FAFB',
-                        }}
-                        onFocus={e => { e.currentTarget.style.borderColor = '#7C3AED'; e.currentTarget.style.background = '#FFFFFF'; }}
-                        onBlur={e => { e.currentTarget.style.borderColor = '#E5E7EB'; e.currentTarget.style.background = '#F9FAFB'; }}
-                        autoFocus
-                      />
+                  {folderSyncError && (
+                    <div style={{
+                      margin: '14px 24px 0',
+                      background: '#FEF2F2', border: '1.5px solid #FECACA',
+                      borderRadius: 10, padding: '10px 14px',
+                      fontSize: '0.8rem', color: '#B91C1C', fontWeight: 500,
+                    }}>
+                      {folderSyncError}
                     </div>
+                  )}
 
-                    {/* Toolbar: counts + Select All / Clear / Expand */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: '0.74rem', color: '#6B7280', fontWeight: 600 }}>
-                          {projectGroups.length} projects · {syncableJobs.length} jobs
-                        </span>
-                        {selectedJobIds.size > 0 && (
-                          <span style={{
-                            fontSize: '0.68rem', fontWeight: 800, padding: '2px 8px', borderRadius: 99,
-                            background: '#EDE9FE', color: '#5B21B6', border: '1px solid #DDD6FE',
-                          }}>
-                            {selectedJobIds.size} selected
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                        <button type="button" onClick={selectAllVisibleJobs}
-                          style={{ background: 'none', border: 'none', color: '#7C3AED', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}>
-                          Select All
-                        </button>
-                        <span style={{ color: '#D1D5DB' }}>|</span>
-                        <button type="button" onClick={clearAllJobs}
-                          style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
-                          Clear
-                        </button>
-                        <span style={{ color: '#D1D5DB' }}>|</span>
-                        <button type="button" onClick={expandAllProjects}
-                          style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
-                          Expand All
-                        </button>
-                        <span style={{ color: '#D1D5DB' }}>|</span>
-                        <button type="button" onClick={collapseAllProjects}
-                          style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
-                          Collapse
-                        </button>
-                      </div>
+                  {folderStatus?.error && !folderSyncError && (
+                    <div style={{
+                      margin: '14px 24px 0',
+                      background: '#FEF2F2', border: '1.5px solid #FECACA',
+                      borderRadius: 10, padding: '10px 14px',
+                      fontSize: '0.8rem', color: '#B91C1C', fontWeight: 500,
+                    }}>
+                      {folderStatus.error}
                     </div>
-                  </div>
+                  )}
 
-                  {/* Job list */}
-                  <div style={{
-                    border: '1px solid #E5E7EB', borderRadius: 12,
-                    margin: '0 24px', overflowY: 'auto', flex: 1,
-                    background: '#F9FAFB', minHeight: 0,
-                  }}>
-                    {syncJobsLoading ? (
-                      <div style={{ padding: '40px 0', textAlign: 'center', color: '#9CA3AF', fontSize: '0.82rem' }}>
-                        <RefreshCw size={20} style={{ animation: 'spin 1s linear infinite', marginBottom: 8, color: '#7C3AED', display: 'block', margin: '0 auto 8px' }} />
-                        <div style={{ fontWeight: 600 }}>Loading jobs from TrimbleFabShop…</div>
-                      </div>
-                    ) : projectGroups.length === 0 ? (
-                      <div style={{ padding: '40px 0', textAlign: 'center', color: '#9CA3AF', fontSize: '0.82rem' }}>
-                        No jobs found{syncSearch ? ` matching "${syncSearch}"` : ''}
+                  {done && lastRun && (
+                    <div style={{
+                      margin: '14px 24px 0', padding: '10px 12px', borderRadius: 10,
+                      background: '#F5F3FF', border: '1px solid #DDD6FE',
+                      display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: '0.76rem', fontWeight: 700,
+                    }}>
+                      <span style={{ color: '#15803D' }}>{imported} imported</span>
+                      <span style={{ color: '#B45309' }}>{skipped} already in DB</span>
+                      <span style={{ color: '#B91C1C' }}>{failed} failed</span>
+                      <span style={{ color: '#1D4ED8' }}>{incomplete} incomplete</span>
+                    </div>
+                  )}
+
+                  <div style={{ overflowY: 'auto', flex: 1, padding: '12px 24px', minHeight: 120 }}>
+                    {pairs.length === 0 ? (
+                      <div style={{ padding: '28px 0', textAlign: 'center', color: '#9CA3AF', fontSize: '0.82rem' }}>
+                        No .t4vjob / .xlsx pairs found in the watch folder yet.
                       </div>
                     ) : (
-                      projectGroups.map(group => {
-                        const isExpanded = expandedProjects.has(group.IDProject) || Boolean(syncSearch.trim());
-                        const selectedInGroup = group.jobs.filter((j: any) => selectedJobIds.has(j.IDJob)).length;
-                        const allInGroupSelected = selectedInGroup === group.jobs.length;
-                        const someInGroupSelected = selectedInGroup > 0 && !allInGroupSelected;
-
+                      pairs.map((pair) => {
+                        const tone = folderPairTone(pair.status);
                         return (
-                          <div key={group.IDProject} style={{ borderBottom: '1px solid #E5E7EB', background: '#FFFFFF' }}>
-                            {/* Project header */}
-                            <div
-                              style={{
-                                padding: '9px 14px',
-                                display: 'flex', alignItems: 'center', gap: 9,
-                                background: selectedInGroup > 0 ? '#FAF5FF' : '#F9FAFB',
-                                borderLeft: `3px solid ${selectedInGroup > 0 ? '#7C3AED' : 'transparent'}`,
-                                userSelect: 'none',
-                              }}
-                            >
-                              {/* Project checkbox */}
-                              <div
-                                onClick={(e) => { e.stopPropagation(); toggleProjectSelection(group); }}
-                                style={{
-                                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                                  border: `2px solid ${allInGroupSelected ? '#7C3AED' : someInGroupSelected ? '#A78BFA' : '#D1D5DB'}`,
-                                  background: allInGroupSelected ? '#7C3AED' : someInGroupSelected ? '#EDE9FE' : '#FFFFFF',
-                                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                }}
-                              >
-                                {allInGroupSelected && <div style={{ width: 8, height: 2, background: '#FFFFFF', borderRadius: 1 }} />}
-                                {someInGroupSelected && !allInGroupSelected && <div style={{ width: 6, height: 6, borderRadius: 1, background: '#7C3AED' }} />}
-                              </div>
-
-                              {/* Project name — clicking expands/collapses */}
-                              <div
-                                onClick={() => toggleProjectExpand(group.IDProject)}
-                                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
-                              >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                                  <FolderKanban size={14} color={selectedInGroup > 0 ? '#7C3AED' : '#6B7280'} />
-                                  <span style={{ fontWeight: 800, fontSize: '0.83rem', color: '#111827' }}>{group.ProjectName}</span>
-                                  {group.IDProject > 0 && (
-                                    <span style={{ fontSize: '0.69rem', color: '#9CA3AF' }}>(#{group.IDProject})</span>
-                                  )}
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                  {selectedInGroup > 0 && (
-                                    <span style={{
-                                      fontSize: '0.67rem', fontWeight: 800, padding: '1px 7px', borderRadius: 99,
-                                      background: '#DDD6FE', color: '#5B21B6',
-                                    }}>
-                                      {selectedInGroup}/{group.jobs.length}
-                                    </span>
-                                  )}
-                                  <span style={{
-                                    fontSize: '0.67rem', fontWeight: 700, padding: '1px 7px', borderRadius: 99,
-                                    background: '#E5E7EB', color: '#374151',
-                                  }}>
-                                    {group.jobs.length} job{group.jobs.length !== 1 ? 's' : ''}
-                                  </span>
-                                  <ChevronDown size={13} color="#9CA3AF" style={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-                                </div>
-                              </div>
+                          <div key={pair.pairKey} style={{
+                            display: 'flex', alignItems: 'flex-start', gap: 11,
+                            padding: '9px 12px', marginBottom: 6,
+                            borderRadius: 10,
+                            background: tone.bg,
+                            border: `1px solid ${tone.border}`,
+                          }}>
+                            <div style={{ flexShrink: 0, marginTop: 1 }}>
+                              {pair.status === 'SYNCED' && <CheckCircle size={14} color="#16A34A" />}
+                              {pair.status === 'SKIPPED' && <Clock size={14} color="#D97706" />}
+                              {pair.status === 'FAILED' && <span style={{ fontSize: '0.8rem' }}>✗</span>}
+                              {pair.status === 'INCOMPLETE' && <span style={{ fontSize: '0.8rem', color: '#2563EB' }}>○</span>}
+                              {pair.status === 'PENDING' && <RefreshCw size={14} color="#7C3AED" />}
                             </div>
-
-                            {/* Job rows */}
-                            {isExpanded && (
-                              <div>
-                                {group.jobs.map((job: any) => {
-                                  const isSelected = selectedJobIds.has(job.IDJob);
-                                  return (
-                                    <div
-                                      key={job.IDJob}
-                                      onClick={() => { if (!job.isSyncing) toggleJobSelection(job.IDJob); }}
-                                      style={{
-                                        padding: '8px 14px 8px 40px',
-                                        borderTop: '1px solid #F3F4F6',
-                                        cursor: job.isSyncing ? 'not-allowed' : 'pointer',
-                                        background: isSelected ? '#FAF5FF' : '#FFFFFF',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                        opacity: job.isSyncing ? 0.6 : 1,
-                                        transition: 'background 0.1s ease',
-                                      }}
-                                      onMouseEnter={e => { if (!isSelected && !job.isSyncing) e.currentTarget.style.background = '#F9FAFB'; }}
-                                      onMouseLeave={e => { if (!isSelected && !job.isSyncing) e.currentTarget.style.background = '#FFFFFF'; }}
-                                    >
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                        {/* Checkbox */}
-                                        <div style={{
-                                          width: 15, height: 15, borderRadius: 4, flexShrink: 0,
-                                          border: `2px solid ${isSelected ? '#7C3AED' : '#D1D5DB'}`,
-                                          background: isSelected ? '#7C3AED' : '#FFFFFF',
-                                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                        }}>
-                                          {isSelected && (
-                                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
-                                              <path d="M1 3.5L3.5 6L8 1" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                          )}
-                                        </div>
-                                        <div>
-                                          <div style={{
-                                            fontWeight: isSelected ? 700 : 500,
-                                            fontSize: '0.8rem',
-                                            color: isSelected ? '#5B21B6' : '#1F2937',
-                                          }}>
-                                            {job.JobName}
-                                          </div>
-                                          <div style={{ fontSize: '0.69rem', color: '#9CA3AF', marginTop: 1 }}>
-                                            Job #{job.IDJob}
-                                          </div>
-                                        </div>
-                                      </div>
-                                      {job.isSyncing && (
-                                        <span style={{
-                                          fontSize: '0.65rem', fontWeight: 700, color: '#D97706',
-                                          background: '#FFFBEB', border: '1px solid #FCD34D',
-                                          borderRadius: 6, padding: '2px 7px',
-                                        }}>
-                                          🔄 Syncing…
-                                        </span>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{
+                                fontWeight: 700, fontSize: '0.82rem', color: tone.color,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              }}>
+                                {pair.jobName || pair.pairKey}
                               </div>
-                            )}
+                              <div style={{ fontSize: '0.71rem', color: '#9CA3AF' }}>
+                                {[pair.t4vjobFile, pair.xlsxFile].filter(Boolean).join(' + ') || pair.pairKey}
+                                {pair.sourceJobId ? ` · ${pair.sourceJobId}` : ''}
+                              </div>
+                              {pair.message && (
+                                <div style={{ fontSize: '0.7rem', color: '#374151', marginTop: 3 }}>
+                                  {pair.message}
+                                  {pair.itemsImported > 0 && ` · ${pair.itemsImported} rows / ${pair.unitsImported} pieces`}
+                                </div>
+                              )}
+                            </div>
+                            <span style={{
+                              flexShrink: 0, fontSize: '0.65rem', fontWeight: 800,
+                              padding: '2px 7px', borderRadius: 99, color: tone.color,
+                              background: '#FFFFFF', border: `1px solid ${tone.border}`,
+                            }}>
+                              {pair.status}
+                            </span>
                           </div>
                         );
                       })
                     )}
                   </div>
 
-                  {/* Error */}
-                  {syncError && (
-                    <div style={{
-                      margin: '10px 24px 0',
-                      background: '#FEF2F2', border: '1.5px solid #FECACA',
-                      borderRadius: 10, padding: '10px 14px',
-                      fontSize: '0.8rem', color: '#B91C1C', fontWeight: 500, flexShrink: 0,
-                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10,
-                    }}>
-                      <span>⚠ {syncError}</span>
-                      <button
-                        type="button"
-                        onClick={openSyncModal}
-                        style={{
-                          flexShrink: 0, background: '#FFFFFF', border: '1px solid #FECACA',
-                          color: '#B91C1C', borderRadius: 6, padding: '3px 8px',
-                          fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer',
-                        }}
-                      >
-                        Retry
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Footer buttons */}
                   <div style={{
-                    padding: '14px 24px', display: 'flex', gap: 10, justifyContent: 'flex-end',
-                    borderTop: '1px solid #F3F4F6', flexShrink: 0,
+                    padding: '14px 24px', borderTop: '1px solid #F3F4F6',
+                    display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0,
                   }}>
                     <button
-                      onClick={closeSyncModal}
+                      onClick={runFolderSyncNow}
+                      disabled={folderSyncing}
                       style={{
-                        padding: '9px 20px', borderRadius: 9, border: '1.5px solid #E5E7EB',
+                        padding: '9px 18px', borderRadius: 9, border: '1.5px solid #E5E7EB',
                         background: '#FFFFFF', color: '#374151', fontSize: '0.82rem',
                         fontWeight: 600, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6,
                       }}
                     >
-                      Cancel
+                      <RefreshCw size={13} /> Sync again
                     </button>
                     <button
-                      id="btn-run-sync"
-                      onClick={runBatchSync}
-                      disabled={selectedJobIds.size === 0}
+                      onClick={closeFolderModal}
                       style={{
                         padding: '9px 22px', borderRadius: 9, border: 'none',
-                        background: selectedJobIds.size === 0
-                          ? '#DDD6FE'
-                          : 'linear-gradient(135deg, #7C3AED, #5B21B6)',
-                        color: '#FFFFFF', fontSize: '0.82rem', fontWeight: 700,
-                        cursor: selectedJobIds.size === 0 ? 'not-allowed' : 'pointer',
-                        display: 'flex', alignItems: 'center', gap: 7,
-                        transition: 'all 0.2s ease',
+                        background: 'linear-gradient(135deg, #7C3AED, #5B21B6)',
+                        color: '#FFFFFF', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6,
                       }}
                     >
-                      <RefreshCw size={13} />
-                      {selectedJobIds.size === 0
-                        ? 'Select Jobs to Sync'
-                        : `Sync ${selectedJobIds.size} Job${selectedJobIds.size !== 1 ? 's' : ''}`}
+                      <CheckCircle size={13} /> Done
                     </button>
                   </div>
                 </>
@@ -1660,4 +1303,3 @@ export default function Dashboard() {
     </div>
   );
 }
-

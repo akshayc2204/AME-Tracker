@@ -284,7 +284,7 @@ function DispatchListView({
           <TextInput
             style={styles.searchInput} placeholder="Search vehicle, project, job…"
             placeholderTextColor="#9CA3AF" value={searchQuery}
-            onChangeText={setSearchQuery} autoCapitalize="none" color="#111827"
+            onChangeText={setSearchQuery} autoCapitalize="none"
           />
         </View>
       </View>
@@ -513,7 +513,7 @@ function VehicleDetailView({
             <TextInput
               style={styles.searchInput} placeholder="Search parts, fitting, piece #…"
               placeholderTextColor="#9CA3AF" value={partSearch}
-              onChangeText={setPartSearch} autoCapitalize="none" color="#111827"
+              onChangeText={setPartSearch} autoCapitalize="none"
             />
           </View>
           <SectionHeader title={`All Parts`} count={filteredParts.length} />
@@ -781,7 +781,7 @@ const styles = StyleSheet.create({
 
   // Search
   searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, marginTop: 12, gap: 8 },
-  searchInput: { flex: 1, fontSize: 14, padding: 0 },
+  searchInput: { flex: 1, fontSize: 14, padding: 0, color: '#111827' },
 
   // List
   listContent: { padding: 16, paddingBottom: 100, gap: 10 },

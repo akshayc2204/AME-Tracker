@@ -133,7 +133,7 @@ export default function ManualTrack() {
     <>
       <div className="page-header">
         <h2>Manual Tracking</h2>
-        <p>Search parts by ItemTracking Number or QR Code to verify status and record shipments</p>
+        <p>Look up a part by tracking number or QR code</p>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 24 }}>

@@ -1,10 +1,11 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, FolderKanban,
-  Truck, Upload, BarChart3,
+  Truck, BarChart3, UserCog,
   LogOut, Barcode
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
+import { api } from '../../services/api';
 
 interface NavItem {
   label: string;
@@ -15,11 +16,13 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', icon: <LayoutDashboard size={18} />, to: '/dashboard' },
-  { label: 'Import', icon: <Upload size={18} />, to: '/import' },
+  // Import page disabled — jobs come from DataUploads folder sync
+  // { label: 'Import', icon: <Upload size={18} />, to: '/import' },
   { label: 'Projects', icon: <FolderKanban size={18} />, to: '/projects' },
   { label: 'Manual Tracking', icon: <Barcode size={18} />, to: '/parts/track' },
   { label: 'Dispatch', icon: <Truck size={18} />, to: '/dispatch' },
   { label: 'Reports', icon: <BarChart3 size={18} />, to: '/reports' },
+  { label: 'Admin', icon: <UserCog size={18} />, to: '/admin' },
 ];
 
 export default function Sidebar() {
@@ -55,17 +58,28 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <div className="sidebar-user" style={{ cursor: 'default' }}>
+        <div
+          className="sidebar-user"
+          style={{ cursor: 'pointer' }}
+          onClick={() => navigate('/admin')}
+          title="Account settings"
+        >
           <div className="user-avatar">{currentUser.avatar}</div>
           <div className="sidebar-user-info">
             <strong>{currentUser.name}</strong>
-            <span>{currentUser.role.replace('_', ' ')}</span>
+            {currentUser.email ? <span>{currentUser.email}</span> : null}
           </div>
         </div>
         <button
           className="sidebar-item"
           style={{ marginTop: 4, width: '100%', color: 'rgba(255,255,255,0.5)' }}
-          onClick={() => navigate('/login')}
+          onClick={async () => {
+            try {
+              await api.logout();
+            } finally {
+              navigate('/login');
+            }
+          }}
         >
           <LogOut size={16} />
           <span>Sign Out</span>

@@ -16,6 +16,7 @@ import { DashboardModule } from './dashboard/dashboard.module'
 import { AuditModule } from './audit/audit.module'
 import { ReportsModule } from './reports/reports.module'
 import { FabshopDbModule } from './fabshop-db/fabshop-db.module'
+import { FolderSyncModule } from './folder-sync/folder-sync.module'
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { FabshopDbModule } from './fabshop-db/fabshop-db.module'
     AuditModule,
     ReportsModule,
     FabshopDbModule,
+    FolderSyncModule,
   ],
   providers: [
     {

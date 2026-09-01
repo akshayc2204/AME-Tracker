@@ -36,7 +36,7 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
             <Package size={18} color="var(--green-600)" />
           </div>
           <div style={{ flex: 1 }}>
-            <div className="drawer-title">Piece #{part.pieceNbr} — {part.fitting}</div>
+            <div className="drawer-title">{String(part.schedule?.Item || part.fitting)} — #{String(part.schedule?.['#'] ?? part.pieceNbr)}</div>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
               {projectName || 'AME Project'} / {jobName || `Job #${part.jobId}`}
             </div>
@@ -54,19 +54,39 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
           {/* Manufacturing Details */}
           <div className="card">
             <div className="card-header" style={{ padding: '12px 16px' }}>
-              <div className="card-title" style={{ fontSize: 12 }}>Manufacturing Data</div>
+              <div className="card-title" style={{ fontSize: 12 }}>Item Schedule</div>
             </div>
             <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              {[
-                { l: 'Piece #', v: `#${part.pieceNbr}` },
-                { l: 'Item ID', v: part.itemId || '—' },
-                { l: 'Fitting', v: part.fitting },
-                { l: 'Description', v: part.description || '—' },
-                { l: 'Dimensions', v: part.information || '—' },
-                { l: 'Weight (kg)', v: part.weight ? `${part.weight} kg` : '—' },
-                { l: 'Track Event', v: part.trackEvent || part.scanEvent || '—' },
-                { l: 'Shipped Timestamp', v: part.shippedAt ? formatTs(part.shippedAt) : '—' },
-              ].map(s => (
+              {(part.schedule
+                ? [
+                    { l: 'Item', v: String(part.schedule.Item ?? part.fitting) },
+                    { l: '#', v: String(part.schedule['#'] ?? part.pieceNbr) },
+                    { l: 'Metal', v: String(part.schedule.Metal ?? '—') },
+                    { l: 'Liner and Insulation', v: String(part.schedule['Liner and Insulation'] ?? '—') },
+                    { l: 'Qty', v: String(part.schedule.Qty ?? '—') },
+                    { l: 'Information', v: String(part.schedule.Information ?? part.information ?? '—') },
+                    { l: 'Area', v: String(part.schedule.Area ?? part.area ?? '—') },
+                    { l: 'Weight', v: String(part.schedule.Weight ?? part.weight ?? '—') },
+                    { l: 'Alpha #', v: String(part.schedule['Alpha #'] ?? '—') },
+                    { l: 'Pressure', v: String(part.schedule.Pressure ?? '—') },
+                    { l: 'Length', v: String(part.schedule.Length ?? '—') },
+                    { l: 'Instructions', v: String(part.schedule.Instructions ?? '—') },
+                    { l: 'Joint 1', v: String(part.schedule['Joint 1'] ?? '—') },
+                    { l: 'Joint 2', v: String(part.schedule['Joint 2'] ?? '—') },
+                    { l: 'Seam', v: String(part.schedule.Seam ?? '—') },
+                    { l: 'Holes', v: String(part.schedule.Holes ?? '—') },
+                  ]
+                : [
+                    { l: 'Piece #', v: `#${part.pieceNbr}` },
+                    { l: 'Item ID', v: part.itemId || '—' },
+                    { l: 'Fitting', v: part.fitting },
+                    { l: 'Description', v: part.description || '—' },
+                    { l: 'Dimensions', v: part.information || '—' },
+                    { l: 'Weight (kg)', v: part.weight ? `${part.weight} kg` : '—' },
+                    { l: 'Track Event', v: part.trackEvent || part.scanEvent || '—' },
+                    { l: 'Shipped Timestamp', v: part.shippedAt ? formatTs(part.shippedAt) : '—' },
+                  ]
+              ).map(s => (
                 <div key={s.l} style={{ background: 'var(--slate-50)', padding: '8px 12px', borderRadius: 8 }}>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{s.l}</div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{s.v}</div>

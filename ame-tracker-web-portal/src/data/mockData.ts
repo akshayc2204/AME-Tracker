@@ -52,10 +52,13 @@ export interface Part {
   weight?: number;
   length?: number;
   sourceFlag?: boolean;
+  status?: TrackingStatus;
+  trackingDateTime?: string | null;
   shippedAt?: string | null;
   trackEvent?: 'Mobile scan' | 'Portal scan' | string | null;
   scanEvent?: string | null;
   lastEvent?: any;
+  schedule?: Record<string, string | number | null>;
   trackingRecords: TrackingRecord[];
 }
 
@@ -66,6 +69,7 @@ export interface TrackingRecord {
   qrCode: string;
   idJob?: number | string;
   status: TrackingStatus;
+  trackingDateTime?: string | null;
   shippedAt?: string | null;
   trackEvent?: 'Mobile scan' | 'Portal scan' | string | null;
   scanEvent?: string | null;

@@ -50,6 +50,20 @@ const reportFiltersSchema = z.object({
 
 export type ReportFilters = z.infer<typeof reportFiltersSchema>
 
+function parseScheduleExtras(raw: string | null | undefined): Record<string, string | number> {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const out: Record<string, string | number> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'number' || typeof value === 'string') out[key] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 @Injectable()
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -71,41 +85,42 @@ export class ReportsService {
     }))
 
     units.forEach((unit) => {
+      const extras = parseScheduleExtras(unit.item.scheduleJson)
       const rowData: Record<string, string | number> = {
-        Item: String(unit.item.sourceItemId),
+        Item: unit.item.fitting || String(unit.item.sourceItemId),
         '#': unit.item.pieceNumber || String(unit.item.sourceItemId),
         Metal: unit.item.metal || 'Standard Gauge',
         'Liner and Insulation': unit.item.liner || 'None',
         Qty: 1,
-        Information: unit.item.fitting || '',
-        Area: unit.item.metricArea ?? '',
-        Weight: unit.item.metricWeight ?? '',
-        Cost: '',
-        Hours: '',
-        Segmented: '',
-        'Alpha #': '',
-        Drawing: unit.job.sourceJobId,
-        Floor: unit.item.storage || '',
-        System: unit.job.jobName,
-        Pressure: '',
-        'Change Order': '',
-        'User 1': '',
-        'User 2': '',
-        Modified: '',
-        Bad: '',
-        'Raw Weight': unit.item.weight ?? '',
-        'Raw Area': unit.item.area ?? '',
-        Instructions: unit.item.instructions || '',
-        'Field Verify': '',
-        Length: '',
-        'Joint 1': '',
-        'Joint 2': '',
-        'Joint 3': '',
-        'Joint 4': '',
-        Seam: '',
-        'Throat Seam': '',
-        'Gore Seam': '',
-        Holes: '',
+        Information: unit.item.dimensions || '',
+        Area: unit.item.metricArea ?? extras['Area'] ?? '',
+        Weight: unit.item.metricWeight ?? extras['Weight'] ?? '',
+        Cost: extras['Cost'] ?? '',
+        Hours: extras['Hours'] ?? '',
+        Segmented: extras['Segmented'] ?? '',
+        'Alpha #': unit.item.alphaNumber || unit.item.pieceNumber || '',
+        Drawing: unit.item.drawing || unit.job.sourceJobId,
+        Floor: unit.item.floor || unit.item.storage || '',
+        System: unit.item.systemName || unit.job.jobName,
+        Pressure: unit.item.pressure || extras['Pressure'] || '',
+        'Change Order': extras['Change Order'] ?? '',
+        'User 1': extras['User 1'] ?? '',
+        'User 2': extras['User 2'] ?? '',
+        Modified: extras['Modified'] ?? '',
+        Bad: extras['Bad'] ?? '',
+        'Raw Weight': extras['Raw Weight'] ?? unit.item.weight ?? '',
+        'Raw Area': extras['Raw Area'] ?? unit.item.area ?? '',
+        Instructions: unit.item.instructions || extras['Instructions'] || '',
+        'Field Verify': extras['Field Verify'] ?? '',
+        Length: extras['Length'] ?? '',
+        'Joint 1': extras['Joint 1'] ?? '',
+        'Joint 2': extras['Joint 2'] ?? '',
+        'Joint 3': extras['Joint 3'] ?? '',
+        'Joint 4': extras['Joint 4'] ?? '',
+        Seam: extras['Seam'] ?? '',
+        'Throat Seam': extras['Throat Seam'] ?? '',
+        'Gore Seam': extras['Gore Seam'] ?? '',
+        Holes: extras['Holes'] ?? '',
       }
       worksheet.addRow(rowData)
     })
@@ -969,8 +984,8 @@ export class ReportsService {
   }
 
   /**
-   * Gate Pass — one document section per Project + Trolly load, matching
-   * FabShop 'AL MULLA AIR DUCT - GATE PASS' layout, with an extra
+   * Shipping List — one document section per Project + Trolly load, matching
+   * FabShop 'AL MULLA AIR DUCT - SHIPPING LIST' layout, with an extra
    * Shipped Date/Time column after SIZE.
    */
   async getGatePassPreview(filtersInput?: {
@@ -1028,7 +1043,7 @@ export class ReportsService {
         }),
       })),
       message: totalPieces
-        ? `${totalPieces} pieces across ${passes.length} gate pass(es) on ${this.formatDisplayDate(reportDate)}.`
+        ? `${totalPieces} pieces across ${passes.length} shipping list(s) on ${this.formatDisplayDate(reportDate)}.`
         : `No shipped pieces found for ${this.formatDisplayDate(reportDate)}.`,
     }
   }
@@ -1053,7 +1068,7 @@ export class ReportsService {
     if (!projectId) {
       throw new BadRequestException({
         errorCode: 'GATE_PASS_PROJECT_REQUIRED',
-        message: 'Select a project to download Gate Pass PDF.',
+        message: 'Select a project to download Shipping List PDF.',
       })
     }
 
@@ -1078,7 +1093,7 @@ export class ReportsService {
       .replace(/[^a-zA-Z0-9&_-]+/g, '')
       .slice(0, 40)
     const stamp = this.timestampStamp(new Date())
-    const filename = `${safe || 'GATE_PASS'}_${stamp}.pdf`
+    const filename = `${safe || 'SHIPPING_LIST'}_${stamp}.pdf`
 
     return { buffer, filename, passCount: passes.length, totalPieces }
   }
@@ -1243,7 +1258,7 @@ export class ReportsService {
       .trim()
   }
 
-  /** Original gate pass prints SIZE as 762 X 305 X 1175.01 */
+  /** Original shipping list prints SIZE as 762 X 305 X 1175.01 */
   private formatGatePassSize(dimensions: string | null | undefined): string {
     if (!dimensions) return ''
     // Trimble often stores two faces: "53.976 x 37.992; 53.976 x 37.992"
@@ -1338,7 +1353,7 @@ export class ReportsService {
         bufferPages: true,
         autoFirstPage: true,
         info: {
-          Title: `Gate Pass - ${reportDate}`,
+          Title: `Shipping List - ${reportDate}`,
           Author: 'AME Tracker',
         },
       })
@@ -1389,7 +1404,7 @@ export class ReportsService {
 
       const drawDocumentHeader = (pass: (typeof passes)[0]) => {
         doc.font('Helvetica-Bold').fontSize(11).fillColor(black)
-        textAt('AL MULLA AIR DUCT -  GATE PASS', 15, 18)
+        textAt('AL MULLA AIR DUCT -  SHIPPING LIST', 15, 18)
 
         doc.font('Helvetica').fontSize(9)
         textAt(pass.projectName, 250, 20, { width: 180, align: 'center' })
@@ -1494,7 +1509,7 @@ export class ReportsService {
       }
 
       if (passes.length === 0) {
-        doc.font('Helvetica-Bold').fontSize(11).text('AL MULLA AIR DUCT -  GATE PASS', 15, 18)
+        doc.font('Helvetica-Bold').fontSize(11).text('AL MULLA AIR DUCT -  SHIPPING LIST', 15, 18)
         doc.font('Helvetica').fontSize(11).text(
           `No shipped pieces found for ${this.formatDisplayDate(reportDate)}.`,
           15,

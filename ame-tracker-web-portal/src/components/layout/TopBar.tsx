@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Search, RefreshCw } from 'lucide-react';
-import { useApp } from '../../store/AppContext';
+import { Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface TopBarProps {
@@ -9,7 +8,6 @@ interface TopBarProps {
 }
 
 export default function TopBar({ title, subtitle }: TopBarProps) {
-  const { currentUser } = useApp();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -33,23 +31,9 @@ export default function TopBar({ title, subtitle }: TopBarProps) {
         <input
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
-          placeholder="Search parts, jobs, tracking…"
+          placeholder="Search tracking…"
         />
       </form>
-
-      <div className="topbar-actions">
-        <button className="icon-btn" title="Refresh" onClick={() => window.location.reload()}>
-          <RefreshCw />
-        </button>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, borderLeft: '1px solid var(--border)' }}>
-          <div className="user-avatar" style={{ width: 32, height: 32, fontSize: 11 }}>{currentUser.avatar}</div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{currentUser.name}</span>
-            <span style={{ fontSize: 10, color: 'var(--green-600)', fontWeight: 500 }}>{currentUser.role.replace('_', ' ')}</span>
-          </div>
-        </div>
-      </div>
     </header>
   );
 }

@@ -189,13 +189,13 @@ function isSameDay(iso: string, date: Date) {
 /* ─── VIEW: Dispatch List ─── */
 function DispatchList({
   vehicles, loading, searchQuery, setSearchQuery, statusFilter, setStatusFilter,
-  onCreateDispatch, onCompleteDispatch, onSelectVehicle, onRefresh,
+  onCreateDispatch, onCompleteDispatch, onSelectVehicle,
 }: {
   vehicles: VehicleDispatch[]; loading: boolean; searchQuery: string;
   setSearchQuery: (q: string) => void; statusFilter: 'ALL' | 'ACTIVE' | 'COMPLETED';
   setStatusFilter: (f: 'ALL' | 'ACTIVE' | 'COMPLETED') => void;
   onCreateDispatch: () => void; onCompleteDispatch: (id: number | string) => void;
-  onSelectVehicle: (v: VehicleDispatch) => void; onRefresh: () => void;
+  onSelectVehicle: (v: VehicleDispatch) => void;
 }) {
   const [dateFilter, setDateFilter] = useState<DateFilter>('today');
   const [customDate, setCustomDate] = useState<string>('');
@@ -224,14 +224,9 @@ function DispatchList({
       {/* Header */}
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h2 style={{ margin: 0 }}>Dispatch & Vehicle Management</h2>
-            <button className="btn btn-ghost btn-sm" onClick={onRefresh} title="Refresh" style={{ color: 'var(--text-muted)' }}>
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
+          <h2 style={{ margin: 0 }}>Dispatch</h2>
           <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)' }}>
-            Click any vehicle to view its full manifest
+            Click a vehicle to view its manifest
           </p>
         </div>
         <button className="btn btn-primary" onClick={onCreateDispatch} style={{ fontWeight: 600 }}>
@@ -792,7 +787,7 @@ export default function Dispatch() {
           vehicles={vehicles} loading={loading} searchQuery={searchQuery}
           setSearchQuery={setSearchQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter}
           onCreateDispatch={handleCreateDispatch} onCompleteDispatch={handleCompleteDispatch}
-          onSelectVehicle={selectVehicle} onRefresh={loadDispatches}
+          onSelectVehicle={selectVehicle}
         />
       )}
 

@@ -26,6 +26,7 @@ export default function Login() {
           name: data.user.fullName || 'Admin',
           role: data.user.role || 'ADMIN',
           avatar: (data.user.fullName || 'A').slice(0, 2).toUpperCase(),
+          email: data.user.email,
         });
         navigate('/dashboard');
         return;
