@@ -40,6 +40,10 @@ export class UpdateProfileDto {
   name?: string
 
   @IsOptional()
+  @IsEmail()
+  email?: string
+
+  @IsOptional()
   @IsString()
   @MinLength(6)
   @MaxLength(128)

@@ -241,6 +241,7 @@ export const api = {
 
   async updateProfile(input: {
     fullName?: string;
+    email?: string;
     newPassword?: string;
   }) {
     return (

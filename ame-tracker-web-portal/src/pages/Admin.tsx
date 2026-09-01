@@ -178,6 +178,7 @@ export default function Admin() {
 
   function startEditProfile() {
     setFullName(currentUser.name || fullName);
+    setEmail(currentUser.email || email);
     setNewPassword('');
     setProfileMsg(null);
     setEditingProfile(true);
@@ -185,6 +186,7 @@ export default function Admin() {
 
   function cancelEditProfile() {
     setFullName(currentUser.name || fullName);
+    setEmail(currentUser.email || email);
     setNewPassword('');
     setProfileMsg(null);
     setEditingProfile(false);
@@ -195,7 +197,12 @@ export default function Admin() {
     setProfileMsg(null);
     const name = fullName.trim();
     if (name.length < 2) {
-      setProfileMsg({ type: 'error', text: 'Name must be at least 2 characters.' });
+      setProfileMsg({ type: 'error', text: 'Role must be at least 2 characters.' });
+      return;
+    }
+    const nextEmail = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      setProfileMsg({ type: 'error', text: 'Enter a valid email address.' });
       return;
     }
     const password = newPassword.trim();
@@ -207,6 +214,7 @@ export default function Admin() {
     try {
       const me = await api.updateProfile({
         fullName: name,
+        email: nextEmail,
         ...(password ? { newPassword: password } : {}),
       });
       applyUser(me);
@@ -214,7 +222,7 @@ export default function Admin() {
       setEditingProfile(false);
       setProfileMsg({
         type: 'success',
-        text: password ? 'Name and password updated.' : 'Profile updated.',
+        text: password ? 'Account and password updated.' : 'Account updated.',
       });
     } catch (err: unknown) {
       setProfileMsg({ type: 'error', text: err instanceof Error ? err.message : 'Could not save profile' });
@@ -293,7 +301,7 @@ export default function Admin() {
               <User size={16} color="var(--green-600)" />
               Your account
             </div>
-            <div className="card-subtitle">Name and password used to sign in to AME Tracker.</div>
+            <div className="card-subtitle">Role, email, and password used to sign in to AME Tracker.</div>
           </div>
           {!editingProfile && (
             <button className="btn btn-secondary btn-sm" type="button" onClick={startEditProfile}>
@@ -307,20 +315,28 @@ export default function Admin() {
           <form className="card-body" onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="admin-form-grid">
               <div className="form-group">
-                <label className="form-label">Name</label>
+                <label className="form-label">Role</label>
                 <input
                   className="form-input"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Your name"
+                  placeholder="Admin"
                   disabled={savingProfile}
-                  autoComplete="name"
+                  autoComplete="organization-title"
                 />
               </div>
               <div className="form-group">
                 <label className="form-label">Email</label>
-                <input className="form-input" value={email} disabled readOnly />
-                <div className="form-hint">Email cannot be changed.</div>
+                <input
+                  className="form-input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  disabled={savingProfile}
+                  autoComplete="email"
+                />
+                <div className="form-hint">Used to sign in. You can change this later.</div>
               </div>
               <div className="form-group admin-form-grid-span">
                 <label className="form-label">New password</label>
@@ -353,7 +369,7 @@ export default function Admin() {
               <div className="user-avatar admin-profile-avatar">{initials}</div>
               <div className="admin-profile-fields">
                 <div>
-                  <div className="form-label" style={{ color: 'var(--text-muted)' }}>Name</div>
+                  <div className="form-label" style={{ color: 'var(--text-muted)' }}>Role</div>
                   <div className="admin-profile-value">{fullName || '—'}</div>
                 </div>
                 <div>

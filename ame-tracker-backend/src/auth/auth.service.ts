@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { JwtService } from '@nestjs/jwt'
 import * as bcrypt from 'bcrypt'
@@ -128,10 +128,25 @@ export class AuthService {
     }
 
     const nextName = (dto.fullName ?? dto.name)?.trim()
-    const data: { name?: string; passwordHash?: string } = {}
+    const nextEmail = dto.email?.trim().toLowerCase()
+    const data: { name?: string; email?: string; passwordHash?: string } = {}
 
     if (nextName) {
       data.name = nextName
+    }
+
+    if (nextEmail && nextEmail !== user.email) {
+      const taken = await this.prisma.user.findUnique({
+        where: { email: nextEmail },
+        select: { id: true },
+      })
+      if (taken && taken.id !== userId) {
+        throw new ConflictException({
+          errorCode: 'EMAIL_IN_USE',
+          message: 'That email is already used by another account',
+        })
+      }
+      data.email = nextEmail
     }
 
     if (dto.newPassword) {
@@ -144,10 +159,10 @@ export class AuthService {
       data.passwordHash = await bcrypt.hash(dto.newPassword, 10)
     }
 
-    if (!data.name && !data.passwordHash) {
+    if (!data.name && !data.email && !data.passwordHash) {
       throw new BadRequestException({
         errorCode: 'NOTHING_TO_UPDATE',
-        message: 'Enter a new name or password to save',
+        message: 'Enter a new role, email, or password to save',
       })
     }
 
