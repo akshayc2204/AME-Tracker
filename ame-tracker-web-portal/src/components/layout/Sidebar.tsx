@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, FolderKanban,
   Truck, BarChart3, UserCog,
-  LogOut, Barcode
+  LogOut
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { api } from '../../services/api';
@@ -19,7 +19,8 @@ const NAV_ITEMS: NavItem[] = [
   // Import page disabled — jobs come from DataUploads folder sync
   // { label: 'Import', icon: <Upload size={18} />, to: '/import' },
   { label: 'Projects', icon: <FolderKanban size={18} />, to: '/projects' },
-  { label: 'Manual Tracking', icon: <Barcode size={18} />, to: '/parts/track' },
+  // Manual Tracking disabled for now
+  // { label: 'Manual Tracking', icon: <Barcode size={18} />, to: '/parts/track' },
   { label: 'Dispatch', icon: <Truck size={18} />, to: '/dispatch' },
   { label: 'Reports', icon: <BarChart3 size={18} />, to: '/reports' },
   { label: 'Admin', icon: <UserCog size={18} />, to: '/admin' },

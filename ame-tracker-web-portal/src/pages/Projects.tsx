@@ -10,7 +10,7 @@ import PartDrawer from '../components/PartDrawer';
 
 const ITEM_SCHEDULE_HEADERS = [
   'Item',
-  '#',
+  'PieceNbr',
   'Metal',
   'Liner and Insulation',
   'Qty',
@@ -20,7 +20,7 @@ const ITEM_SCHEDULE_HEADERS = [
   'Cost',
   'Hours',
   'Segmented',
-  'Alpha #',
+  'Alpha number',
   'Drawing',
   'Floor',
   'System',
@@ -75,6 +75,23 @@ type TableView = 'schedule' | 'tracking';
 const TRACKING_NONE_HEADERS = new Set<string>(['Description', 'TrackingStatus', 'BackOrdered']);
 const TRACKING_BOOL_HEADERS = new Set<string>(['Component', 'InContainer']);
 
+function scheduleLookup(
+  values: Record<string, string | number | boolean | null | undefined> | undefined,
+  header: string,
+): string | number | boolean | null | undefined {
+  if (!values) return undefined;
+  if (header === 'PieceNbr') {
+    const piece = values.PieceNbr ?? values['#'];
+    const alpha = values['Alpha number'] ?? values['Alpha #'];
+    const p = piece != null && String(piece).trim() !== '' ? String(piece).trim() : null;
+    const a = alpha != null && String(alpha).trim() !== '' ? String(alpha).trim() : null;
+    if (p && a && p === a) return p.replace(/[^\d].*$/, '') || p;
+    return p ?? (a ? a.replace(/[^\d].*$/, '') || a : null);
+  }
+  if (header === 'Alpha number') return values['Alpha number'] ?? values['Alpha #'];
+  return values[header];
+}
+
 function scheduleCell(value: string | number | boolean | null | undefined): string {
   if (typeof value === 'boolean') return value ? 'True' : 'False';
   if (value === null || value === undefined || value === '') return '—';
@@ -113,14 +130,33 @@ function formatTimestamp(value: string | number | boolean | null | undefined): s
   });
 }
 
+function statusCellClass(status: string) {
+  const s = (status || 'PENDING').toUpperCase();
+  if (s === 'SHIPPED') return 'col-live col-status-shipped';
+  if (s === 'LOADED') return 'col-live col-status-loaded';
+  if (s === 'CANCELLED') return 'col-live col-status-cancelled';
+  return 'col-live col-status-active';
+}
+
+function datetimeCellClass(status: string) {
+  const s = (status || 'PENDING').toUpperCase();
+  if (s === 'SHIPPED') return 'col-live col-datetime-shipped';
+  return 'col-live';
+}
+
 function StatusBadge({ status }: { status: string }) {
   const s = (status || 'PENDING').toUpperCase();
   const cls = s === 'SHIPPED' ? 'badge-shipped'
     : s === 'LOADED' ? 'badge-loaded'
     : s === 'PARTIAL' ? 'badge-partial'
     : s === 'CANCELLED' ? 'badge-cancelled'
+    : s === 'ACTIVE' || s === 'PENDING' ? 'badge-active'
     : 'badge-pending';
-  return <span className={`badge ${cls}`}><span className="badge-dot" />{s}</span>;
+  const label = s === 'SHIPPED' ? 'Shipped'
+    : s === 'LOADED' ? 'Loaded'
+    : s === 'PENDING' || s === 'ACTIVE' ? 'Active'
+    : s;
+  return <span className={`badge ${cls}`}><span className="badge-dot" />{label}</span>;
 }
 
 function compareSchedule(
@@ -192,7 +228,7 @@ export default function Projects() {
       downloadId: Number(j.t4vjobDownloadId) || 68,
       jobName: j.name || j.jobName,
       projectName: j.project?.name || j.project?.projectName || 'Project',
-      status: 'ACTIVE' as const,
+      status: (totalParts > 0 && pendingParts === 0 ? 'SHIPPED' : 'ACTIVE') as 'SHIPPED' | 'ACTIVE',
       importedAt: new Date().toISOString(),
       importedBy: 'Admin',
       totalParts,
@@ -216,7 +252,7 @@ export default function Projects() {
   const [search, setSearch] = useState('');
   const [itemFilter, setItemFilter] = useState('');
   const [tableView, setTableView] = useState<TableView>('schedule');
-  const [sortKey, setSortKey] = useState<ScheduleSortKey>('#');
+  const [sortKey, setSortKey] = useState<ScheduleSortKey>('PieceNbr');
   const [trackingSortKey, setTrackingSortKey] = useState<TrackingSortKey>('ItemTracking');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedPart, setSelectedPart] = useState<Part | null>(null);
@@ -239,10 +275,11 @@ export default function Projects() {
           if (res?.items) {
             const mapped: Part[] = res.items.map((item) => {
               const values = item.values || {};
+              const pieceRaw = scheduleLookup(values, 'PieceNbr');
               return {
                 id: String(item.id),
                 jobId: selectedJob.id,
-                pieceNbr: values['#'] ?? values['Alpha #'] ?? item.sourceItemId,
+                pieceNbr: typeof pieceRaw === 'string' || typeof pieceRaw === 'number' ? pieceRaw : item.sourceItemId,
                 fitting: String(values.Item || '—'),
                 itemId: item.sourceItemId,
                 description: String(values.Information || ''),
@@ -300,14 +337,14 @@ export default function Projects() {
         || (p.status || '').toLowerCase().includes(q)
         || formatTimestamp(p.trackingDateTime).toLowerCase().includes(q)
         || ITEM_SCHEDULE_HEADERS.some((header) =>
-          scheduleCell(values[header]).toLowerCase().includes(q),
+          scheduleCell(scheduleLookup(values, header)).toLowerCase().includes(q),
         );
       const matchItem = !itemFilter || String(values.Item || p.fitting) === itemFilter;
       return matchSearch && matchItem;
     }).sort((a, b) => {
       if (sortKey === 'Status') return compareSchedule(a.status, b.status, sortDir);
       if (sortKey === DATETIME_HEADER) return compareSchedule(a.trackingDateTime, b.trackingDateTime, sortDir);
-      return compareSchedule(a.schedule?.[sortKey], b.schedule?.[sortKey], sortDir);
+      return compareSchedule(scheduleLookup(a.schedule, sortKey), scheduleLookup(b.schedule, sortKey), sortDir);
     });
   }, [jobParts, search, itemFilter, sortKey, sortDir]);
 
@@ -347,7 +384,7 @@ export default function Projects() {
     }
     setSearch('');
     setItemFilter('');
-    setSortKey('#');
+    setSortKey('PieceNbr');
     setTrackingSortKey('ItemTracking');
     setSortDir('asc');
     setTableView('schedule');
@@ -364,7 +401,7 @@ export default function Projects() {
     }
     setSearch('');
     setItemFilter('');
-    setSortKey('#');
+    setSortKey('PieceNbr');
     setTrackingSortKey('ItemTracking');
     setSortDir('asc');
     setTableView('schedule');
@@ -460,7 +497,7 @@ export default function Projects() {
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <span className={`badge badge-${selectedJob.status.toLowerCase()}`} style={{ fontSize: 12, padding: '5px 12px' }}>
-                {selectedJob.status}
+                {selectedJob.status === 'SHIPPED' ? 'Shipped' : 'Active'}
               </span>
             </div>
           </div>
@@ -499,8 +536,8 @@ export default function Projects() {
               <div className="card-title">Parts &amp; Tracking Records</div>
               <div className="card-subtitle">
                 {tableView === 'schedule'
-                  ? 'Item Schedule columns'
-                  : 'Tracking Export columns (one row per physical piece)'}
+                  ? 'Item columns'
+                  : 'Item Unit columns (one row per physical piece)'}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -521,7 +558,7 @@ export default function Projects() {
                     fontSize: 12,
                   }}
                 >
-                  Item Schedule ({jobParts.length})
+                  Item ({jobParts.length})
                 </button>
                 <button
                   className="btn btn-sm"
@@ -534,7 +571,7 @@ export default function Projects() {
                     fontSize: 12,
                   }}
                 >
-                  Tracking Export ({liveTracking.length})
+                  Item Unit ({liveTracking.length})
                 </button>
               </div>
               <div className="topbar-search" style={{ flex: 'none' }}>
@@ -542,7 +579,7 @@ export default function Projects() {
                 <input
                   value={search}
                   onChange={e => { setSearch(e.target.value); setPage(1); }}
-                  placeholder={tableView === 'schedule' ? 'Search item schedule…' : 'Search tracking export…'}
+                  placeholder={tableView === 'schedule' ? 'Search items…' : 'Search item units…'}
                   style={{ width: 180 }}
                 />
                 {search && <button onClick={() => setSearch('')}><X size={13} /></button>}
@@ -588,16 +625,17 @@ export default function Projects() {
                         <td
                           key={header}
                           className={[
-                            header === '#' || header === 'Alpha #' ? 'td-mono' : '',
-                            header === 'Status' || header === DATETIME_HEADER ? 'col-live' : '',
+                            header === 'PieceNbr' || header === 'Alpha number' ? 'td-mono' : '',
+                            header === DATETIME_HEADER ? datetimeCellClass(part.status || 'PENDING') : '',
+                            header === 'Status' ? statusCellClass(part.status || 'PENDING') : '',
                           ].filter(Boolean).join(' ') || undefined}
-                          title={header === 'Status' ? part.status || 'PENDING' : header === DATETIME_HEADER ? formatTimestamp(part.trackingDateTime) : scheduleCell(part.schedule?.[header])}
+                          title={header === 'Status' ? part.status || 'PENDING' : header === DATETIME_HEADER ? formatTimestamp(part.trackingDateTime) : scheduleCell(scheduleLookup(part.schedule, header))}
                         >
                           {header === 'Status'
                             ? <StatusBadge status={part.status || 'PENDING'} />
                             : header === DATETIME_HEADER
                               ? formatTimestamp(part.trackingDateTime)
-                              : scheduleCell(part.schedule?.[header])}
+                              : scheduleCell(scheduleLookup(part.schedule, header))}
                         </td>
                       ))}
                     </tr>
@@ -628,7 +666,8 @@ export default function Projects() {
                           key={header}
                           className={[
                             header === 'ItemTracking' || header === 'PieceNbr' || header === 'ItemID' || header === DATETIME_HEADER ? 'td-mono' : '',
-                            header === 'Status' || header === DATETIME_HEADER ? 'col-live' : '',
+                            header === DATETIME_HEADER ? datetimeCellClass(row.status) : '',
+                            header === 'Status' ? statusCellClass(row.status) : '',
                           ].filter(Boolean).join(' ') || undefined}
                           title={header === 'Status' ? row.status : header === DATETIME_HEADER ? formatTimestamp(row.trackingDateTime) : trackingCell(header, row.values[header])}
                         >
@@ -761,7 +800,9 @@ export default function Projects() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
-                        <span className={`badge badge-${job.status.toLowerCase()}`}>{job.status}</span>
+                        <span className={`badge badge-${job.status.toLowerCase()}`}>
+                          {job.status === 'SHIPPED' ? 'Shipped' : 'Active'}
+                        </span>
                         <div className="btn btn-secondary btn-sm" style={{ padding: '4px 10px', fontSize: 12 }}>
                           View Parts <ChevronRight size={13} />
                         </div>

@@ -40,7 +40,12 @@ export class DashboardService {
       this.buildSeriesGroupBy(from, to, diffDays, 'transits'),
       this.prisma.trackingEvent.findMany({
         take: 200,
-        where: { createdAt: { gte: from, lte: to } },
+        where: {
+          createdAt: { gte: from, lte: to },
+          // Completing a dispatch writes a SHIP event for every loaded part.
+          // Those are not scans — include the original SCAN plus portal ship-from-manual-track.
+          OR: [{ eventType: 'SCAN' }, { source: 'Portal scan' }],
+        },
         orderBy: { createdAt: 'desc' },
         include: {
           itemUnit: {

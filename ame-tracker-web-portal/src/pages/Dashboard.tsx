@@ -179,6 +179,60 @@ interface TrackingFeedItem {
   timestamp: string;
 }
 
+function isActualScan(ev: Pick<TrackingFeedItem, 'eventType' | 'source'>) {
+  const type = String(ev.eventType || '').toUpperCase();
+  const source = String(ev.source || '').toLowerCase();
+  if (type === 'SCAN') return true;
+  return source.includes('portal');
+}
+
+function jobLiveStatus(job: {
+  totalParts?: number;
+  shippedParts?: number;
+  pendingParts?: number;
+  status?: string;
+  _count?: { products?: number; shipped?: number; pending?: number };
+}) {
+  const total = Number(job.totalParts ?? job._count?.products ?? 0);
+  const shipped = Number(job.shippedParts ?? job._count?.shipped ?? 0);
+  const pending = Number(job.pendingParts ?? job._count?.pending ?? Math.max(0, total - shipped));
+  const allShipped = total > 0 && pending === 0 && shipped >= total;
+  if (allShipped) {
+    return { label: 'Shipped', className: 'badge-shipped', color: '#FB923C', bg: '#FFF7ED' };
+  }
+  return { label: 'Active', className: 'badge-active', color: '#047857', bg: '#ECFDF5' };
+}
+
+function trackingStatusTone(status: string) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'SHIPPED') {
+    return { label: 'Shipped', className: 'badge-shipped', color: '#FB923C', bg: '#FFF7ED', border: '#FED7AA' };
+  }
+  if (s === 'LOADED') {
+    return { label: 'Loaded', className: 'badge-loaded', color: '#1D4ED8', bg: '#DBEAFE', border: '#93C5FD' };
+  }
+  return {
+    label: s === 'PENDING' || s === 'ACTIVE' || !s ? 'Active' : s,
+    className: 'badge-active',
+    color: '#047857',
+    bg: '#ECFDF5',
+    border: '#A7F3D0',
+  };
+}
+
+function isSameScan(a: TrackingFeedItem, b: TrackingFeedItem) {
+  if (a.id != null && b.id != null && String(a.id) === String(b.id)) return true;
+  const aTs = new Date(a.timestamp).getTime();
+  const bTs = new Date(b.timestamp).getTime();
+  const closeInTime = Number.isFinite(aTs) && Number.isFinite(bTs) && Math.abs(aTs - bTs) < 5000;
+  return (
+    String(a.pieceNo) === String(b.pieceNo) &&
+    String(a.itemTracking) === String(b.itemTracking) &&
+    String(a.vehicleNumber) === String(b.vehicleNumber) &&
+    closeInTime
+  );
+}
+
 // ─── Date Filter Bar ──────────────────────────────────────────────────────────
 interface DateFilterBarProps {
   activePreset: PresetId;
@@ -541,7 +595,7 @@ export default function Dashboard() {
       if (jobsData && Array.isArray(jobsData)) setLiveJobs(jobsData);
 
       if (dashData?.recentEvents && Array.isArray(dashData.recentEvents)) {
-        setLiveEvents(dashData.recentEvents);
+        setLiveEvents(dashData.recentEvents.filter(isActualScan));
       } else {
         setLiveEvents([]);
       }
@@ -565,7 +619,7 @@ export default function Dashboard() {
 
     const onScan = (ev: DashboardScanEvent) => {
       const feedItem: TrackingFeedItem = {
-        id: `ws-${ev.partId}-${Date.now()}`,
+        id: `ws-${ev.partId}-${ev.timestamp}`,
         pieceNo: ev.pieceNo,
         fitting: ev.fitting,
         itemTracking: ev.itemTracking || '',
@@ -580,7 +634,11 @@ export default function Dashboard() {
         userName: ev.userName,
         timestamp: ev.timestamp,
       };
-      setLiveEvents(prev => [feedItem, ...prev].slice(0, 200));
+      setLiveEvents(prev => {
+        const alreadyListed = prev.some(existing => isSameScan(existing, feedItem));
+        if (alreadyListed) return prev;
+        return [feedItem, ...prev].slice(0, 200);
+      });
       setNewScanIds(prev => new Set([...prev, feedItem.id]));
       // Clear highlight after 3 s
       setTimeout(() => setNewScanIds(prev => { const s = new Set(prev); s.delete(feedItem.id); return s; }), 3000);
@@ -840,11 +898,25 @@ export default function Dashboard() {
               <Activity size={20} />
             </div>
             <div>
-              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
                 Tracking
+                <span style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  color: '#047857',
+                  backgroundColor: '#ECFDF5',
+                  border: '1px solid #A7F3D0',
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  letterSpacing: '0.02em',
+                }}>
+                  {filteredEvents.length}
+                </span>
               </h3>
               <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#6B7280' }}>
                 Recent scans · <span style={{ color: '#1D4ED8', fontWeight: 600 }}>{rangeDisplayLabel}</span>
+                {' · '}
+                {filteredEvents.length} {filteredEvents.length === 1 ? 'scan' : 'scans'}
               </p>
             </div>
           </div>
@@ -916,6 +988,7 @@ export default function Dashboard() {
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.8125rem' }}>
             <thead>
               <tr style={{ background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', position: 'sticky', top: 0, zIndex: 10 }}>
+                <th style={{ padding: '9px 10px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 44, textAlign: 'center' }}>#</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 140 }}>PIECE &amp; FITTING</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase' }}>PROJECT &amp; JOB</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 120 }}>VEHICLE NO</th>
@@ -928,29 +1001,33 @@ export default function Dashboard() {
             <tbody>
               {filteredEvents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: '40px 16px', textAlign: 'center', color: '#6B7280' }}>
+                  <td colSpan={8} style={{ padding: '40px 16px', textAlign: 'center', color: '#6B7280' }}>
                     <Activity size={32} style={{ margin: '0 auto 8px', opacity: 0.3 }} />
                     <div style={{ fontWeight: 600, fontSize: 14, color: '#374151' }}>No tracking events in this period</div>
-                    <div style={{ fontSize: 12, marginTop: 3 }}>Try a different date range or scan parts from the mobile app / manual tracking page.</div>
+                    <div style={{ fontSize: 12, marginTop: 3 }}>Try a different date range or scan parts from the mobile app.</div>
                   </td>
                 </tr>
               ) : (
-                filteredEvents.map((ev) => {
+                filteredEvents.map((ev, index) => {
                   const isMobile = (ev.source ?? '').toLowerCase().includes('mobile');
+                  const evStatus = trackingStatusTone(ev.status);
                   return (
                     <tr
                       key={ev.id}
                       style={{ borderBottom: '1px solid #F3F4F6', transition: 'background-color 0.15s ease' }}
                       className={`hover:bg-slate-50${newScanIds.has(ev.id) ? ' scan-row-new' : ''}`}
                     >
+                      <td style={{ padding: '10px 10px', textAlign: 'center', color: '#6B7280', fontWeight: 700, fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums' }}>
+                        {index + 1}
+                      </td>
                       {/* Piece & Fitting */}
                       <td style={{ padding: '10px 14px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span
                             style={{
                               width: 30, height: 30, borderRadius: 6,
-                              backgroundColor: '#ECFDF5', border: '1.5px solid #047857',
-                              color: '#047857', fontWeight: 800, fontSize: '0.75rem',
+                              backgroundColor: evStatus.bg, border: `1.5px solid ${evStatus.color}`,
+                              color: evStatus.color, fontWeight: 800, fontSize: '0.75rem',
                               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                             }}
                           >
@@ -958,7 +1035,9 @@ export default function Dashboard() {
                           </span>
                           <div>
                             <div style={{ fontWeight: 700, color: '#111827', fontSize: '0.8125rem' }}>{ev.fitting}</div>
-                            <span style={{ fontSize: '0.68rem', color: '#047857', fontWeight: 700 }}>✓ SHIPPED</span>
+                            <span className={`badge ${evStatus.className}`} style={{ fontSize: '0.68rem', padding: '1px 8px', marginTop: 2 }}>
+                              {evStatus.label}
+                            </span>
                           </div>
                         </div>
                       </td>
@@ -1062,7 +1141,9 @@ export default function Dashboard() {
                   </td>
                 </tr>
               ) : (
-                liveJobs.map((job) => (
+                liveJobs.map((job) => {
+                  const jobStatus = jobLiveStatus(job);
+                  return (
                   <tr
                     key={job.id}
                     onClick={() => navigate(`/projects?project=${job.project?.id || 1}&job=${job.id}`)}
@@ -1079,8 +1160,11 @@ export default function Dashboard() {
                     <td style={{ padding: '10px 14px' }}>
                       <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{job._count?.products || 0} pieces</span>
                     </td>
-                    <td style={{ padding: '10px 14px' }}>
-                      <span className="badge badge-active">ACTIVE</span>
+                    <td style={{ padding: '10px 14px', background: jobStatus.bg }}>
+                      <span className={`badge ${jobStatus.className}`}>
+                        {jobStatus.label === 'Shipped' && <Truck size={12} />}
+                        {jobStatus.label}
+                      </span>
                     </td>
                     <td style={{ textAlign: 'right', paddingRight: 16 }}>
                       <span style={{ color: 'var(--green-600)', display: 'inline-flex', alignItems: 'center' }}>
@@ -1088,7 +1172,8 @@ export default function Dashboard() {
                       </span>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

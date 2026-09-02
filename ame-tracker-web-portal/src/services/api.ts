@@ -431,6 +431,7 @@ export const api = {
     return (await request<Array<any>>(`/products/qr-labels${query}`)).data;
   },
 
+  // Manual Tracking disabled for now — used only by ManualTrack.tsx
   async updateProductStatus(id: string | number, payload: { status: string; qrCode?: string; vehicleNumber?: string; reason?: string }) {
     markItemAsPortalScanned(id);
     if (payload.qrCode) markItemAsPortalScanned(payload.qrCode);

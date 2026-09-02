@@ -1,3 +1,4 @@
+// Manual Tracking is disabled for now (route and nav commented out in App.tsx / Sidebar.tsx).
 import { useState } from 'react';
 import { Search, CheckCircle, Monitor, Barcode, Package, Clock, Copy, Check } from 'lucide-react';
 import { useApp } from '../store/AppContext';

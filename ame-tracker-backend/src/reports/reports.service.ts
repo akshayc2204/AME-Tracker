@@ -4,6 +4,7 @@ import PDFDocument from 'pdfkit'
 import * as QRCode from 'qrcode'
 import { z } from 'zod'
 import { PrismaService } from '../prisma/prisma.service'
+import { schedulePieceNbr } from '../imports/item-schedule'
 
 const REPORT_HEADERS = [
   'Item',
@@ -88,7 +89,7 @@ export class ReportsService {
       const extras = parseScheduleExtras(unit.item.scheduleJson)
       const rowData: Record<string, string | number> = {
         Item: unit.item.fitting || String(unit.item.sourceItemId),
-        '#': unit.item.pieceNumber || String(unit.item.sourceItemId),
+        '#': schedulePieceNbr(unit.item.pieceNumber, unit.item.alphaNumber) || String(unit.item.sourceItemId),
         Metal: unit.item.metal || 'Standard Gauge',
         'Liner and Insulation': unit.item.liner || 'None',
         Qty: 1,
@@ -157,7 +158,7 @@ export class ReportsService {
     unitCount: number
     totalWeight: number
   }> {
-    const reportDate = filtersInput?.date || this.localDateString(new Date())
+    const reportDate = this.parseReportDate(filtersInput?.date)
     const formattedDate = this.formatDisplayDate(reportDate)
     const { start, end } = this.dayBounds(reportDate)
 
@@ -417,7 +418,7 @@ export class ReportsService {
     jobId?: number
     date?: string
   }) {
-    const reportDate = filtersInput?.date || this.localDateString(new Date())
+    const reportDate = this.parseReportDate(filtersInput?.date)
     const { start, end } = this.dayBounds(reportDate)
 
     const units = await this.prisma.itemUnit.findMany({
@@ -612,11 +613,54 @@ export class ReportsService {
     return `${y}-${m}-${d}`
   }
 
+  /** Accept YYYY-MM-DD or DD/MM/YYYY; default to today. */
+  private parseReportDate(dateStr?: string): string {
+    const raw = dateStr?.trim()
+    if (!raw) return this.localDateString(new Date())
+
+    const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(raw)
+    const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw)
+
+    let year: number
+    let month: number
+    let day: number
+    if (iso) {
+      year = Number(iso[1])
+      month = Number(iso[2])
+      day = Number(iso[3])
+    } else if (dmy) {
+      day = Number(dmy[1])
+      month = Number(dmy[2])
+      year = Number(dmy[3])
+    } else {
+      throw new BadRequestException({
+        errorCode: 'INVALID_REPORT_DATE',
+        message: `Invalid report date "${raw}". Use YYYY-MM-DD.`,
+      })
+    }
+
+    const parsed = new Date(year, month - 1, day)
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day
+    ) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_REPORT_DATE',
+        message: `Invalid report date "${raw}".`,
+      })
+    }
+
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  }
+
   /** Local-time day window, so a scan at 23:30 lands on the day it happened. */
   private dayBounds(dateStr: string): { start: Date; end: Date } {
-    const [y, m, d] = dateStr.split('-').map(Number)
-    const start = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0)
-    const end = new Date(y, (m || 1) - 1, (d || 1) + 1, 0, 0, 0, 0)
+    const iso = this.parseReportDate(dateStr)
+    const [y, m, d] = iso.split('-').map(Number)
+    const start = new Date(y, m - 1, d, 0, 0, 0, 0)
+    const end = new Date(y, m - 1, d + 1, 0, 0, 0, 0)
     return { start, end }
   }
 
@@ -995,7 +1039,7 @@ export class ReportsService {
     date?: string
     trolley?: string
   }) {
-    const reportDate = filtersInput?.date || this.localDateString(new Date())
+    const reportDate = this.parseReportDate(filtersInput?.date)
     const projectId = await this.resolveGatePassProjectId(
       filtersInput?.projectId,
       filtersInput?.projectName,
@@ -1060,7 +1104,7 @@ export class ReportsService {
     passCount: number
     totalPieces: number
   }> {
-    const reportDate = filtersInput?.date || this.localDateString(new Date())
+    const reportDate = this.parseReportDate(filtersInput?.date)
     const projectId = await this.resolveGatePassProjectId(
       filtersInput?.projectId,
       filtersInput?.projectName,

@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { Search } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+// Manual Tracking disabled for now — top-bar search previously opened /parts/track
+// import { useState } from 'react';
+// import { Search } from 'lucide-react';
+// import { useNavigate } from 'react-router-dom';
 
 interface TopBarProps {
   title: string;
@@ -8,16 +9,16 @@ interface TopBarProps {
 }
 
 export default function TopBar({ title, subtitle }: TopBarProps) {
-  const navigate = useNavigate();
-  const [searchQuery, setSearchQuery] = useState('');
+  // const navigate = useNavigate();
+  // const [searchQuery, setSearchQuery] = useState('');
 
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      navigate(`/parts/track?code=${encodeURIComponent(searchQuery.trim())}`);
-      setSearchQuery('');
-    }
-  }
+  // function handleSearch(e: React.FormEvent) {
+  //   e.preventDefault();
+  //   if (searchQuery.trim()) {
+  //     navigate(`/parts/track?code=${encodeURIComponent(searchQuery.trim())}`);
+  //     setSearchQuery('');
+  //   }
+  // }
 
   return (
     <header className="topbar">
@@ -26,6 +27,7 @@ export default function TopBar({ title, subtitle }: TopBarProps) {
         {subtitle && <div className="topbar-subtitle">{subtitle}</div>}
       </div>
 
+      {/* Manual Tracking disabled for now
       <form onSubmit={handleSearch} className="topbar-search">
         <Search />
         <input
@@ -34,6 +36,7 @@ export default function TopBar({ title, subtitle }: TopBarProps) {
           placeholder="Search tracking…"
         />
       </form>
+      */}
     </header>
   );
 }

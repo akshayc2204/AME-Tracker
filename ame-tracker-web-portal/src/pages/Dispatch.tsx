@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
-  Truck, CheckCircle, Package, Plus,
+  Truck, Package,
   RefreshCw, X, ZoomIn, Search,
   ChevronRight, FolderKanban, Settings,
   CheckCircle2, ArrowLeft, List, Layers,
@@ -98,14 +98,17 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function PartStatusChip({ status }: { status: string }) {
+  const shipped = status === 'SHIPPED';
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 3,
-      background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0',
+      background: shipped ? '#FFF7ED' : '#ECFDF5',
+      color: shipped ? '#FB923C' : '#047857',
+      border: `1px solid ${shipped ? '#FED7AA' : '#A7F3D0'}`,
       padding: '1px 7px', borderRadius: 4, fontSize: '0.7rem', fontWeight: 700,
     }}>
       <CheckCircle2 size={10} />
-      {status === 'SHIPPED' ? 'Shipped' : 'Loaded'}
+      {shipped ? 'Shipped' : status === 'LOADED' ? 'Loaded' : 'Active'}
     </span>
   );
 }
@@ -189,12 +192,11 @@ function isSameDay(iso: string, date: Date) {
 /* ─── VIEW: Dispatch List ─── */
 function DispatchList({
   vehicles, loading, searchQuery, setSearchQuery, statusFilter, setStatusFilter,
-  onCreateDispatch, onCompleteDispatch, onSelectVehicle,
+  onSelectVehicle,
 }: {
   vehicles: VehicleDispatch[]; loading: boolean; searchQuery: string;
   setSearchQuery: (q: string) => void; statusFilter: 'ALL' | 'ACTIVE' | 'COMPLETED';
   setStatusFilter: (f: 'ALL' | 'ACTIVE' | 'COMPLETED') => void;
-  onCreateDispatch: () => void; onCompleteDispatch: (id: number | string) => void;
   onSelectVehicle: (v: VehicleDispatch) => void;
 }) {
   const [dateFilter, setDateFilter] = useState<DateFilter>('today');
@@ -222,16 +224,11 @@ function DispatchList({
   return (
     <>
       {/* Header */}
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Dispatch</h2>
-          <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)' }}>
-            Click a vehicle to view its manifest
-          </p>
-        </div>
-        <button className="btn btn-primary" onClick={onCreateDispatch} style={{ fontWeight: 600 }}>
-          <Plus size={15} /> New Dispatch Session
-        </button>
+      <div className="page-header" style={{ marginBottom: 18 }}>
+        <h2 style={{ margin: 0 }}>Dispatch</h2>
+        <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)' }}>
+          Click a vehicle to view its manifest
+        </p>
       </div>
 
       {/* Search & Filter Bar */}
@@ -304,7 +301,7 @@ function DispatchList({
             {dateFilter === 'today' ? 'No dispatches recorded today' : 'No dispatches match your filter'}
           </div>
           <div style={{ fontSize: 12, marginTop: 4 }}>
-            {dateFilter === 'today' ? 'Start a new session or view the overall history below.' : 'Try changing your search or date filter.'}
+            {dateFilter === 'today' ? 'View the overall history below.' : 'Try changing your search or date filter.'}
           </div>
           {dateFilter !== 'all' && (
             <button
@@ -370,18 +367,8 @@ function DispatchList({
                   </div>
                 )}
 
-                {/* Actions */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                  {isActive && (
-                    <button className="btn btn-primary btn-sm"
-                      onClick={e => { e.stopPropagation(); onCompleteDispatch(vehicle.id); }}
-                      style={{ padding: '6px 12px', fontSize: '0.78rem' }}>
-                      <CheckCircle size={13} /> Complete
-                    </button>
-                  )}
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <ChevronRight size={18} color="#6B7280" />
-                  </div>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <ChevronRight size={18} color="#6B7280" />
                 </div>
               </div>
             );
@@ -411,13 +398,13 @@ function DispatchList({
 /* ─── VIEW: Vehicle Detail ─── */
 function VehicleDetail({
   vehicle, tab, setTab, onBack, onSelectProject, onSelectJob,
-  onPreviewPhoto, onCompleteDispatch,
+  onPreviewPhoto,
 }: {
   vehicle: VehicleDispatch; tab: 'all' | 'project' | 'job';
   setTab: (t: 'all' | 'project' | 'job') => void;
   onBack: () => void; onSelectProject: (p: ProjectItem) => void;
   onSelectJob: (p: ProjectItem, j: JobItem) => void;
-  onPreviewPhoto: (url: string) => void; onCompleteDispatch: (id: number | string) => void;
+  onPreviewPhoto: (url: string) => void;
 }) {
   const photoUrl = resolveVehiclePhotoUrl(vehicle.truckPhotoUrl);
   const isActive = vehicle.status === 'ACTIVE';
@@ -480,21 +467,14 @@ function VehicleDetail({
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', flexShrink: 0 }}>
-          {photoUrl && (
-            <div onClick={() => onPreviewPhoto(photoUrl)} style={{ width: 80, height: 60, borderRadius: 10, overflow: 'hidden', border: '2px solid #86EFAC', cursor: 'pointer', position: 'relative' }}>
-              <img src={photoUrl} alt="Truck" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <ZoomIn size={14} color="#fff" />
-              </div>
+        {photoUrl && (
+          <div onClick={() => onPreviewPhoto(photoUrl)} style={{ width: 80, height: 60, borderRadius: 10, overflow: 'hidden', border: '2px solid #86EFAC', cursor: 'pointer', position: 'relative', flexShrink: 0 }}>
+            <img src={photoUrl} alt="Truck" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ZoomIn size={14} color="#fff" />
             </div>
-          )}
-          {isActive && (
-            <button className="btn btn-primary btn-sm" onClick={() => onCompleteDispatch(vehicle.id)} style={{ padding: '8px 16px' }}>
-              <CheckCircle size={14} /> Complete Dispatch
-            </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Tab Strip */}
@@ -748,16 +728,6 @@ export default function Dispatch() {
 
   useEffect(() => { void loadDispatches(); }, []);
 
-  async function handleCreateDispatch() {
-    try { await api.createDispatch(); await loadDispatches(); }
-    catch (err: any) { alert(err?.message || 'Failed to create dispatch'); }
-  }
-
-  async function handleCompleteDispatch(id: number | string) {
-    try { await api.completeDispatch(id); await loadDispatches(); }
-    catch (err: any) { alert(err?.message || 'Cannot complete dispatch without loaded parts'); }
-  }
-
   function selectVehicle(vehicle: VehicleDispatch) {
     setVehicleTab('all');
     setView({ type: 'vehicle', vehicle, tab: 'all' });
@@ -786,7 +756,6 @@ export default function Dispatch() {
         <DispatchList
           vehicles={vehicles} loading={loading} searchQuery={searchQuery}
           setSearchQuery={setSearchQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter}
-          onCreateDispatch={handleCreateDispatch} onCompleteDispatch={handleCompleteDispatch}
           onSelectVehicle={selectVehicle}
         />
       )}
@@ -798,7 +767,6 @@ export default function Dispatch() {
           onSelectProject={p => selectProject(view.vehicle, p)}
           onSelectJob={(p, j) => selectJob(view.vehicle, p, j)}
           onPreviewPhoto={url => setPreviewPhoto({ url, vehicleNumber: view.vehicle.vehicleNumber })}
-          onCompleteDispatch={handleCompleteDispatch}
         />
       )}
 

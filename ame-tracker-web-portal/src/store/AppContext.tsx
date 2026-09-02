@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useReducer, useState } from 'react';
 import {
   PARTS, DISPATCHES, RECENT_EVENTS, DASHBOARD_KPI,
-  type Part, type ScanEvent, type Dispatch, type TrackingStatus
+  type Part, type ScanEvent, type Dispatch
 } from '../data/mockData';
 import { api, getAuthToken } from '../services/api';
 
@@ -14,7 +14,8 @@ interface AppState {
 
 type Action =
   | { type: 'SCAN_EVENT'; payload: ScanEvent }
-  | { type: 'MANUAL_TRACK'; payload: { trackingRecordId: string; newStatus: TrackingStatus; event: ScanEvent } }
+  // Manual Tracking disabled for now
+  // | { type: 'MANUAL_TRACK'; payload: { trackingRecordId: string; newStatus: TrackingStatus; event: ScanEvent } }
   | { type: 'IMPORT_BATCH'; payload: unknown }
   | { type: 'SET_KPI'; payload: typeof DASHBOARD_KPI }
   | { type: 'RESET' };
@@ -40,18 +41,19 @@ function reducer(state: AppState, action: Action): AppState {
         kpi: { ...state.kpi, shippedParts: shipped, pendingParts: pending, todayScans: state.kpi.todayScans + 1 },
       };
     }
-    case 'MANUAL_TRACK': {
-      const { trackingRecordId, newStatus, event } = action.payload;
-      const newEvents = [event, ...state.recentEvents].slice(0, 50);
-      const newParts = state.parts.map(part => ({
-        ...part,
-        trackingRecords: part.trackingRecords.map(tr => {
-          if (tr.id !== trackingRecordId) return tr;
-          return { ...tr, status: newStatus, events: [event, ...(tr.events || [])] };
-        }),
-      }));
-      return { ...state, parts: newParts, recentEvents: newEvents };
-    }
+    // Manual Tracking disabled for now
+    // case 'MANUAL_TRACK': {
+    //   const { trackingRecordId, newStatus, event } = action.payload;
+    //   const newEvents = [event, ...state.recentEvents].slice(0, 50);
+    //   const newParts = state.parts.map(part => ({
+    //     ...part,
+    //     trackingRecords: part.trackingRecords.map(tr => {
+    //       if (tr.id !== trackingRecordId) return tr;
+    //       return { ...tr, status: newStatus, events: [event, ...(tr.events || [])] };
+    //     }),
+    //   }));
+    //   return { ...state, parts: newParts, recentEvents: newEvents };
+    // }
     case 'SET_KPI':
       return { ...state, kpi: action.payload };
     case 'IMPORT_BATCH': return state;

@@ -291,6 +291,7 @@ export class ProductsService {
     })
   }
 
+  // Manual Tracking disabled for now — called by POST /products/:id/status
   async updateStatus(
     id: string | number,
     status: string,

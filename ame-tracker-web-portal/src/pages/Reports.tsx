@@ -24,6 +24,42 @@ function comparePieceNo(a: unknown, b: unknown): number {
   return sa.localeCompare(sb, undefined, { numeric: true });
 }
 
+function formatDispatchDate(date: Date): string {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function localIsoDate(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Convert table filter dates (dd/mm/yyyy) to ISO (yyyy-mm-dd) for APIs and date inputs. */
+function toIsoDate(value?: string | null): string {
+  if (!value || value === 'ALL') return localIsoDate();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+  if (dmy) {
+    const [, day, month, year] = dmy;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  return localIsoDate();
+}
+
+function isShippedStatus(status: unknown): boolean {
+  const s = String(status || '').toUpperCase();
+  return s === 'SHIPPED' || s === 'LOADED';
+}
+
+function isPendingPart(part: { status?: unknown }): boolean {
+  const s = String(part.status || '').toUpperCase();
+  return s === 'PENDING' || s === 'PACKED' || s === '';
+}
+
 export default function Reports() {
   // Filter States
   const [selectedDate, setSelectedDate] = useState<string>('ALL');
@@ -285,15 +321,19 @@ export default function Reports() {
     return Array.from(pSet).sort();
   }, [liveProjects, liveParts]);
 
-  // Available unique dates
+  // Available unique dates — always include today so pending-till-today can be viewed
   const availableDates = useMemo(() => {
-    const dates = new Set<string>();
+    const dates = new Set<string>([formatDispatchDate(new Date())]);
     liveParts.forEach(p => {
       if (p.dispatchDate && p.dispatchDate !== '—') {
         dates.add(p.dispatchDate);
       }
     });
-    return Array.from(dates).sort().reverse();
+    return Array.from(dates).sort((a, b) => {
+      const [ad, am, ay] = a.split('/').map(Number);
+      const [bd, bm, by] = b.split('/').map(Number);
+      return new Date(by, (bm || 1) - 1, bd || 1).getTime() - new Date(ay, (am || 1) - 1, ad || 1).getTime();
+    });
   }, [liveParts]);
 
   // Available vehicles
@@ -323,16 +363,28 @@ export default function Reports() {
   const filteredRows = useMemo(() => {
     return liveParts
       .filter(part => {
+        const pending = isPendingPart(part);
+
         // Status filter
         if (selectedStatus === 'SHIPPED') {
-          if (part.status !== 'SHIPPED' && part.status !== 'LOADED') return false;
+          if (!isShippedStatus(part.status)) return false;
+        } else if (selectedStatus === 'PENDING') {
+          if (!pending) return false;
         } else if (selectedStatus !== 'ALL' && part.status !== selectedStatus) {
           return false;
         }
 
-        // Date Filter
-        if (selectedDate && selectedDate !== 'ALL' && part.dispatchDate !== selectedDate) {
-          return false;
+        // Date filter: shipped on the selected date, plus pending-till-today
+        // (pending parts have no dispatch date, so they must not be dropped).
+        if (selectedDate && selectedDate !== 'ALL') {
+          const shippedOnDate = isShippedStatus(part.status) && part.dispatchDate === selectedDate;
+          if (selectedStatus === 'SHIPPED') {
+            if (!shippedOnDate) return false;
+          } else if (selectedStatus === 'PENDING') {
+            if (!pending) return false;
+          } else if (!shippedOnDate && !pending) {
+            return false;
+          }
         }
 
         // Secondary Filters
@@ -404,7 +456,7 @@ export default function Reports() {
       r.itemId,
       r.itemTracking,
       r.shippedTimestampFormatted,
-      r.trackEvent || 'Portal scan'
+      isPendingPart(r) ? 'Pending' : (r.trackEvent === 'Portal scan' ? 'Portal scan' : 'scanned'),
     ]);
 
     const csvContent = [
@@ -436,7 +488,7 @@ export default function Reports() {
   const [gaugePreviewOpen, setGaugePreviewOpen] = useState(false);
   const [gaugePreviewLoading, setGaugePreviewLoading] = useState(false);
   const [gaugeDownloading, setGaugeDownloading] = useState(false);
-  const [gaugePreviewDate, setGaugePreviewDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [gaugePreviewDate, setGaugePreviewDate] = useState(() => localIsoDate());
   const [gaugePreview, setGaugePreview] = useState<{
     filename: string;
     date: string;
@@ -466,7 +518,7 @@ export default function Reports() {
   const [gatePassOpen, setGatePassOpen] = useState(false);
   const [gatePassLoading, setGatePassLoading] = useState(false);
   const [gatePassDownloading, setGatePassDownloading] = useState(false);
-  const [gatePassDate, setGatePassDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [gatePassDate, setGatePassDate] = useState(() => localIsoDate());
   const [gatePassTrolley, setGatePassTrolley] = useState('ALL');
   const [gatePassProject, setGatePassProject] = useState('ALL');
   const [gatePassPreview, setGatePassPreview] = useState<{
@@ -508,9 +560,7 @@ export default function Reports() {
   }, [availableProjects, gatePassPreview?.projects]);
 
   async function openGaugePreview(dateOverride?: string) {
-    const date =
-      dateOverride ||
-      (selectedDate !== 'ALL' ? selectedDate : new Date().toISOString().slice(0, 10));
+    const date = toIsoDate(dateOverride || (selectedDate !== 'ALL' ? selectedDate : undefined));
     setGaugePreviewDate(date);
     setGaugePreviewOpen(true);
     setGaugePreviewLoading(true);
@@ -551,9 +601,9 @@ export default function Reports() {
     trolleyOverride?: string,
     projectOverride?: string,
   ) {
-    const date =
-      dateOverride ||
-      (selectedDate !== 'ALL' ? selectedDate : gatePassDate);
+    const date = toIsoDate(
+      dateOverride || (selectedDate !== 'ALL' ? selectedDate : gatePassDate),
+    );
     const trolley = trolleyOverride ?? gatePassTrolley;
     const project = projectOverride ?? gatePassProject;
     setGatePassDate(date);
@@ -740,7 +790,7 @@ export default function Reports() {
             }}
           >
             <option value="SHIPPED">Shipped &amp; Loaded</option>
-            <option value="ALL">All Statuses</option>
+            <option value="ALL">All</option>
             <option value="PENDING">Pending Only</option>
           </select>
 
@@ -890,6 +940,18 @@ export default function Reports() {
         <span style={{ color: '#4B5563' }}>
           Total Tracked: <strong style={{ color: '#111827' }}>{filteredRows.length} parts</strong>
         </span>
+        {selectedStatus === 'ALL' && (
+          <>
+            <span style={{ color: '#9CA3AF' }}>·</span>
+            <span style={{ color: '#047857', fontWeight: 700 }}>
+              Shipped: {filteredRows.filter((p) => isShippedStatus(p.status)).length}
+            </span>
+            <span style={{ color: '#9CA3AF' }}>·</span>
+            <span style={{ color: '#B45309', fontWeight: 700 }}>
+              Pending: {filteredRows.filter((p) => isPendingPart(p)).length}
+            </span>
+          </>
+        )}
         {selectedProject !== 'ALL' && (
           <>
             <span style={{ color: '#9CA3AF' }}>·</span>
@@ -1014,23 +1076,49 @@ export default function Reports() {
 
                     {/* Track Event */}
                     <td style={{ padding: '7px 10px' }}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          fontSize: '0.7rem',
-                          fontWeight: 700,
-                          backgroundColor: row.trackEvent === 'Portal scan' ? '#EFF6FF' : '#ECFDF5',
-                          color: row.trackEvent === 'Portal scan' ? '#1D4ED8' : '#047857',
-                          border: row.trackEvent === 'Portal scan' ? '1px solid #BFDBFE' : '1px solid #A7F3D0',
-                        }}
-                      >
-                        <span style={{ fontSize: '0.65rem' }}>{row.trackEvent === 'Portal scan' ? '💻' : '📱'}</span>
-                        {row.trackEvent || 'Mobile scan'}
-                      </span>
+                      {isPendingPart(row) ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            backgroundColor: '#FFFBEB',
+                            color: '#B45309',
+                            border: '1px solid #FDE68A',
+                          }}
+                        >
+                          Pending
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            whiteSpace: 'nowrap',
+                            backgroundColor: row.trackEvent === 'Portal scan' ? '#EFF6FF' : '#ECFDF5',
+                            color: row.trackEvent === 'Portal scan' ? '#1D4ED8' : '#047857',
+                            border: row.trackEvent === 'Portal scan' ? '1px solid #BFDBFE' : '1px solid #A7F3D0',
+                          }}
+                        >
+                          {row.trackEvent === 'Portal scan' ? (
+                            <>
+                              <span style={{ fontSize: '0.65rem' }}>💻</span>
+                              Portal scan
+                            </>
+                          ) : (
+                            'scanned'
+                          )}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))

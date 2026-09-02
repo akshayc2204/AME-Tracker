@@ -62,6 +62,7 @@ End
         {
           pieceId: 1,
           pieceNumber: '1',
+          alphaNumber: '1',
           fitting: 'Cut Duct',
           metal: '1.00 - [ALGHURAIR]',
           liner: null,
@@ -81,6 +82,7 @@ End
         {
           pieceId: 3,
           pieceNumber: '3',
+          alphaNumber: '3',
           fitting: 'Standard Duct',
           metal: '1.00 - [ALGHURAIR]',
           liner: null,
@@ -99,7 +101,8 @@ End
         },
         {
           pieceId: 3,
-          pieceNumber: '3-',
+          pieceNumber: '3',
+          alphaNumber: '3-',
           fitting: 'Cut Duct',
           metal: '1.00 - [ALGHURAIR]',
           liner: null,
@@ -150,6 +153,9 @@ End
     expect(combined.rows.find((r) => r.alphaNumber === '3')?.quantity).toBe(4)
     expect(combined.rows.find((r) => r.alphaNumber === '3-')?.sourceItemId).toBe(28)
     expect(combined.unmatchedTracking).toBe(0)
+
+    expect(combined.rows.find((r) => r.alphaNumber === '17A')?.pieceNumber).toBe('17')
+    expect(combined.rows.find((r) => r.alphaNumber === '3-')?.pieceNumber).toBe('3')
 
     const units = combined.rows.flatMap((r) => r.units)
     expect(units).toHaveLength(16)

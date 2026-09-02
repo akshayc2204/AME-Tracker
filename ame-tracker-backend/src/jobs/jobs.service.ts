@@ -29,6 +29,7 @@ export class JobsService {
       const totalParts = job._count.itemUnits
       const shippedParts = job.itemUnits.filter((u) => u.currentStatus === 'SHIPPED').length
       const pendingParts = totalParts - shippedParts
+      const status = totalParts > 0 && pendingParts === 0 ? 'SHIPPED' : 'ACTIVE'
 
       return {
         id: job.id,
@@ -36,6 +37,7 @@ export class JobsService {
         sourceJobId: job.sourceJobId,
         name: job.jobName,
         jobName: job.jobName,
+        status,
         project: {
           id: job.project?.id ?? 0,
           code: job.project?.projectName ?? '',

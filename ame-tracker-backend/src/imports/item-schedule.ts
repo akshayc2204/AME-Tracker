@@ -1,6 +1,6 @@
 export const ITEM_SCHEDULE_HEADERS = [
   'Item',
-  '#',
+  'PieceNbr',
   'Metal',
   'Liner and Insulation',
   'Qty',
@@ -10,7 +10,7 @@ export const ITEM_SCHEDULE_HEADERS = [
   'Cost',
   'Hours',
   'Segmented',
-  'Alpha #',
+  'Alpha number',
   'Drawing',
   'Floor',
   'System',
@@ -57,11 +57,32 @@ export function parseScheduleExtras(raw: string | null | undefined): Record<stri
 
 export function extraValue(
   extras: Record<string, string | number | null>,
-  key: string,
+  ...keys: string[]
 ): string | number | null {
-  if (extras[key] !== undefined) return extras[key]
-  const match = Object.keys(extras).find((k) => k.toLowerCase() === key.toLowerCase())
-  return match ? extras[match] : null
+  for (const key of keys) {
+    if (extras[key] !== undefined && extras[key] !== null && extras[key] !== '') return extras[key]
+    const match = Object.keys(extras).find((k) => k.toLowerCase() === key.toLowerCase())
+    if (match && extras[match] !== undefined && extras[match] !== null && extras[match] !== '') {
+      return extras[match]
+    }
+  }
+  return null
+}
+
+/** Numeric "#" when older imports stored Alpha # in both pieceNumber and alphaNumber. */
+export function schedulePieceNbr(
+  pieceNumber?: string | null,
+  alphaNumber?: string | null,
+): string | null {
+  const piece =
+    pieceNumber != null && String(pieceNumber).trim() !== '' ? String(pieceNumber).trim() : null
+  const alpha =
+    alphaNumber != null && String(alphaNumber).trim() !== '' ? String(alphaNumber).trim() : null
+  if (piece && alpha && piece === alpha) {
+    const numeric = piece.replace(/[^\d].*$/, '')
+    return numeric || piece
+  }
+  return piece ?? (alpha ? alpha.replace(/[^\d].*$/, '') || alpha : null)
 }
 
 export function itemToScheduleValues(item: {
@@ -92,7 +113,11 @@ export function itemToScheduleValues(item: {
 
   return {
     Item: pick('Item', item.fitting),
-    '#': pick('#', item.pieceNumber ?? (item.sourceItemId != null ? String(item.sourceItemId) : null)),
+    PieceNbr: pick(
+      'PieceNbr',
+      schedulePieceNbr(item.pieceNumber, item.alphaNumber) ??
+        (item.sourceItemId != null ? String(item.sourceItemId) : null),
+    ) ?? extraValue(extras, '#'),
     Metal: pick('Metal', item.metal),
     'Liner and Insulation': pick('Liner and Insulation', item.liner),
     Qty: pick('Qty', item.quantity ?? 1),
@@ -102,7 +127,7 @@ export function itemToScheduleValues(item: {
     Cost: extraValue(extras, 'Cost'),
     Hours: extraValue(extras, 'Hours'),
     Segmented: extraValue(extras, 'Segmented'),
-    'Alpha #': pick('Alpha #', item.alphaNumber ?? item.pieceNumber),
+    'Alpha number': pick('Alpha number', item.alphaNumber ?? item.pieceNumber) ?? extraValue(extras, 'Alpha #'),
     Drawing: pick('Drawing', item.drawing),
     Floor: pick('Floor', item.floor),
     System: pick('System', item.systemName),

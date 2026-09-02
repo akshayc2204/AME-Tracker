@@ -36,7 +36,7 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
             <Package size={18} color="var(--green-600)" />
           </div>
           <div style={{ flex: 1 }}>
-            <div className="drawer-title">{String(part.schedule?.Item || part.fitting)} — #{String(part.schedule?.['#'] ?? part.pieceNbr)}</div>
+            <div className="drawer-title">{String(part.schedule?.Item || part.fitting)} — #{String(part.pieceNbr)}</div>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
               {projectName || 'AME Project'} / {jobName || `Job #${part.jobId}`}
             </div>
@@ -54,20 +54,20 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
           {/* Manufacturing Details */}
           <div className="card">
             <div className="card-header" style={{ padding: '12px 16px' }}>
-              <div className="card-title" style={{ fontSize: 12 }}>Item Schedule</div>
+              <div className="card-title" style={{ fontSize: 12 }}>Item</div>
             </div>
             <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               {(part.schedule
                 ? [
                     { l: 'Item', v: String(part.schedule.Item ?? part.fitting) },
-                    { l: '#', v: String(part.schedule['#'] ?? part.pieceNbr) },
+                    { l: 'PieceNbr', v: String(part.pieceNbr) },
                     { l: 'Metal', v: String(part.schedule.Metal ?? '—') },
                     { l: 'Liner and Insulation', v: String(part.schedule['Liner and Insulation'] ?? '—') },
                     { l: 'Qty', v: String(part.schedule.Qty ?? '—') },
                     { l: 'Information', v: String(part.schedule.Information ?? part.information ?? '—') },
                     { l: 'Area', v: String(part.schedule.Area ?? part.area ?? '—') },
                     { l: 'Weight', v: String(part.schedule.Weight ?? part.weight ?? '—') },
-                    { l: 'Alpha #', v: String(part.schedule['Alpha #'] ?? '—') },
+                    { l: 'Alpha number', v: String(part.schedule['Alpha number'] ?? part.schedule['Alpha #'] ?? '—') },
                     { l: 'Pressure', v: String(part.schedule.Pressure ?? '—') },
                     { l: 'Length', v: String(part.schedule.Length ?? '—') },
                     { l: 'Instructions', v: String(part.schedule.Instructions ?? '—') },
@@ -87,9 +87,9 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
                     { l: 'Shipped Timestamp', v: part.shippedAt ? formatTs(part.shippedAt) : '—' },
                   ]
               ).map(s => (
-                <div key={s.l} style={{ background: 'var(--slate-50)', padding: '8px 12px', borderRadius: 8 }}>
+                <div key={s.l} style={{ background: 'var(--slate-50)', padding: '8px 12px', borderRadius: 8, minWidth: 0 }}>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{s.l}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{s.v}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{s.v}</div>
                 </div>
               ))}
             </div>
@@ -102,7 +102,7 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
             </div>
             <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               {part.trackingRecords.map(tr => (
-                <div key={tr.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                <div key={tr.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span className="td-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--green-700)' }}>
@@ -113,7 +113,7 @@ export default function PartDrawer({ part, onClose, projectName, jobName }: Prop
                   </div>
                   {tr.itemTracking && (
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                      UUID: <span className="td-mono" style={{ fontSize: 10, color: 'var(--purple-700)' }}>{tr.itemTracking}</span>
+                      UUID: <span className="td-mono" style={{ fontSize: 10, color: 'var(--purple-700)', overflowWrap: 'anywhere' }}>{tr.itemTracking}</span>
                     </div>
                   )}
                 </div>

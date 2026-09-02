@@ -92,7 +92,7 @@ function unitFromTracking(item: VjobItem): CombinedUnit {
 function sourceItemIdFor(catalog: JobReportItem | null, units: VjobItem[]): number {
   const fromTracking = Number(units[0]?.itemId)
   if (Number.isInteger(fromTracking) && fromTracking > 0) return fromTracking
-  if (catalog) return deriveSourceItemId(catalog.pieceId, catalog.pieceNumber)
+  if (catalog) return deriveSourceItemId(catalog.pieceId, catalog.alphaNumber)
   const pieceNbr = units[0]?.pieceNbr || '0'
   const pieceId = Number(String(pieceNbr).replace(/\D/g, '')) || 0
   return deriveSourceItemId(pieceId || 1, pieceNbr)
@@ -107,7 +107,7 @@ function rowFromCatalog(
   return {
     sourceItemId: sourceItemIdFor(catalog, tracking),
     pieceNumber: catalog.pieceNumber,
-    alphaNumber: catalog.pieceNumber,
+    alphaNumber: catalog.alphaNumber || catalog.pieceNumber,
     fitting: catalog.fitting || lead?.fitting || null,
     metal: catalog.metal,
     liner: catalog.liner,
@@ -135,11 +135,12 @@ function rowFromCatalog(
 
 function rowFromTrackingOnly(tracking: VjobItem[]): CombinedScheduleRow {
   const lead = tracking[0]
-  const pieceNumber = lead?.pieceNbr || String(lead?.pieceNo || '')
+  const alphaNumber = lead?.pieceNbr || String(lead?.pieceNo || '')
+  const pieceNumber = alphaNumber.replace(/[^\d].*$/, '') || alphaNumber
   return {
     sourceItemId: sourceItemIdFor(null, tracking),
     pieceNumber,
-    alphaNumber: pieceNumber,
+    alphaNumber,
     fitting: lead?.fitting || null,
     metal: null,
     liner: null,
@@ -191,12 +192,12 @@ export function combineItemSchedule(
   const rows: CombinedScheduleRow[] = []
 
   for (const catalog of report?.rows ?? []) {
-    const key = normPieceKey(catalog.pieceNumber)
+    const key = normPieceKey(catalog.alphaNumber || catalog.pieceNumber)
     const tracking = trackingByPiece.get(key) ?? []
     usedKeys.add(key)
     if (catalog.quantity !== tracking.length && tracking.length > 0) {
       warnings.push(
-        `Alpha # ${catalog.pieceNumber}: schedule Qty ${catalog.quantity} vs ${tracking.length} tracking rows`,
+        `Alpha # ${catalog.alphaNumber || catalog.pieceNumber}: schedule Qty ${catalog.quantity} vs ${tracking.length} tracking rows`,
       )
     }
     rows.push(rowFromCatalog(catalog, tracking))

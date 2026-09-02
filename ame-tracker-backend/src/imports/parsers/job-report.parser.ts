@@ -2,7 +2,10 @@ import ExcelJS from 'exceljs'
 
 export interface JobReportItem {
   pieceId: number
+  /** Item Schedule "#" — numeric piece index (may repeat across Alpha variants). */
   pieceNumber: string
+  /** Item Schedule "Alpha #" — join key to .t4vjob PieceNbr (e.g. 3, 3-, 5A). */
+  alphaNumber: string
   fitting: string | null
   metal: string | null
   liner: string | null
@@ -29,7 +32,10 @@ const CORE_HEADER_NEEDLES = new Set([
   'item',
   'fitting',
   '#',
+  'piecenbr',
+  'piece nbr',
   'alpha #',
+  'alpha number',
   'metal',
   'liner and insulation',
   'liner',
@@ -126,7 +132,13 @@ function looksLikeHeaderRow(headers: Map<number, string>): boolean {
   const values = Array.from(headers.values()).map(norm)
   const hasItem = values.some((v) => v === 'item' || v === 'fitting')
   const hasPiece = values.some(
-    (v) => v === '#' || v === 'alpha #' || v.includes('piece') || v.includes('peace'),
+    (v) =>
+      v === '#' ||
+      v === 'alpha #' ||
+      v === 'alpha number' ||
+      v === 'piecenbr' ||
+      v.includes('piece') ||
+      v.includes('peace'),
   )
   return hasItem && hasPiece
 }
@@ -159,9 +171,10 @@ export async function parseJobReport(buffer: Buffer): Promise<JobReportParseResu
   const fittingCol =
     findExact(headers, 'item', 'fitting') ?? findColumn(headers, 'fitting', 'iteam')
   const pieceCol =
-    findExact(headers, '#') ??
+    findExact(headers, '#', 'piecenbr', 'piece nbr') ??
     findColumn(headers, '#/peace', 'peace id', 'piece id', 'piece number')
-  const alphaCol = findExact(headers, 'alpha #') ?? findColumn(headers, 'alpha', 'peace number')
+  const alphaCol =
+    findExact(headers, 'alpha #', 'alpha number') ?? findColumn(headers, 'alpha', 'peace number')
   const metalCol = findExact(headers, 'metal') ?? findColumn(headers, 'metal')
   const linerCol =
     findExact(headers, 'liner and insulation', 'liner') ?? findColumn(headers, 'liner', 'insulation')
@@ -206,16 +219,19 @@ export async function parseJobReport(buffer: Buffer): Promise<JobReportParseResu
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber <= headerRowNumber) return
 
-    const pieceRaw = cellString(row, alphaCol) ?? cellString(row, pieceCol)
-    if (!pieceRaw) {
+    const hashRaw = cellString(row, pieceCol)
+    const alphaRaw = cellString(row, alphaCol)
+    if (!hashRaw && !alphaRaw) {
       const hasAnything = Array.from(headers.keys()).some((c) => cellString(row, c))
       if (hasAnything) warnings.push(`Row ${rowNumber}: skipped because piece # is empty`)
       return
     }
 
-    const pieceId = Number(String(pieceRaw).replace(/\D/g, '')) || Number(pieceRaw) || 0
+    const pieceNumber = hashRaw ?? alphaRaw ?? ''
+    const alphaNumber = alphaRaw ?? hashRaw ?? pieceNumber
+    const pieceId = Number(String(pieceNumber).replace(/\D/g, '')) || Number(pieceNumber) || 0
     if (!pieceId) {
-      warnings.push(`Row ${rowNumber}: skipped because piece # "${pieceRaw}" is not numeric`)
+      warnings.push(`Row ${rowNumber}: skipped because piece # "${pieceNumber}" is not numeric`)
       return
     }
 
@@ -234,7 +250,8 @@ export async function parseJobReport(buffer: Buffer): Promise<JobReportParseResu
 
     rows.push({
       pieceId,
-      pieceNumber: cellString(row, alphaCol) ?? String(pieceRaw),
+      pieceNumber,
+      alphaNumber,
       fitting,
       metal,
       liner: cellString(row, linerCol),
