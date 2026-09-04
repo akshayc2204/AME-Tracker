@@ -8,6 +8,7 @@ import React, {
 } from 'react'
 import type { AuthUser } from '@/types/api'
 import { fetchMe, login as loginRequest, logout as logoutRequest } from '@/services/auth'
+import { ensureApiBaseUrl } from '@/services/api'
 import {
   clearSession,
   getRefreshToken,
@@ -34,13 +35,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const init = async () => {
       try {
+        // Discover a reachable API host (USB reverse / LAN / emulator).
+        try {
+          await ensureApiBaseUrl()
+        } catch {
+          // Login screen can still show; requests will rediscover later.
+        }
+
         const stored = await getStoredUser()
 
         // No stored session → go to login immediately
         if (!stored) {
           if (mounted) {
             setUser(null)
-            setIsLoading(false)  // ← was missing! caused infinite spinner
+            setIsLoading(false)
           }
           return
         }
@@ -50,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const me = await Promise.race<AuthUser>([
             fetchMe(),
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('timeout')), 4000),
+              setTimeout(() => reject(new Error('timeout')), 8000),
             ),
           ])
           if (mounted) setUser(me)

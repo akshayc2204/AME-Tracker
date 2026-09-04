@@ -4,13 +4,15 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "npx expo start --lan",
-    "start": "npx expo start --lan",
-    "start:clear": "npx expo start --lan -c",
-    "start:tunnel": "npx expo start --tunnel",
+    "adb:reverse": "node ./scripts/adb-reverse.js",
+    "dev": "node ./scripts/adb-reverse.js && npx expo start --lan",
+    "start": "node ./scripts/adb-reverse.js && npx expo start --lan",
+    "start:clear": "node ./scripts/adb-reverse.js && npx expo start --lan -c",
+    "start:tunnel": "node ./scripts/adb-reverse.js && npx expo start --tunnel",
     "build:web": "npx expo export --platform web",
     "lint": "npx expo lint",
-    "android": "npx expo run:android",
+    "android": "node ./scripts/adb-reverse.js && npx expo run:android",
+    "android:reverse": "node ./scripts/adb-reverse.js",
     "ios": "npx expo run:ios"
   },
   "dependencies": {

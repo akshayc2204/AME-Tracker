@@ -43,11 +43,16 @@ npm run start
 
 ### API URL
 
+The app **auto-discovers** the API host (USB `adb reverse`, LAN IP from Metro, or emulator).
+
+Use `npm start` / `npm run android` so `adb reverse` is applied automatically for USB devices.
+
+Optional override in `.env`:
+
 | Target | `EXPO_PUBLIC_API_URL` |
 |--------|------------------------|
-| iOS simulator | `http://localhost:3000` |
-| Android emulator | `http://localhost:3000` (mapped to `10.0.2.2` in app) |
-| Physical device | `http://<your-LAN-IP>:3000` |
+| Auto (recommended) | leave unset |
+| Force LAN IP | `http://<your-LAN-IP>:3000` |
 
 ### Seed operator
 

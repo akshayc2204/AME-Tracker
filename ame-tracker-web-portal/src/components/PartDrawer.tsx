@@ -160,7 +160,7 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
             <div className="card-header" style={{ padding: '12px 16px' }}>
               <div className="card-title" style={{ fontSize: 12 }}>Item</div>
             </div>
-            <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
               {(localPart.schedule
                 ? [
                     { l: 'Item', v: String(localPart.schedule.Item ?? localPart.fitting) },
@@ -209,9 +209,9 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
                 const unitId = parseTrackingUnitId(tr.id);
                 return (
                 <div key={tr.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', minWidth: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="td-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--green-700)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <span className="td-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--green-700)', overflowWrap: 'anywhere' }}>
                         {tr.qrCode}
                       </span>
                     </div>
@@ -253,14 +253,14 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
                     <div key={ev.id} className="timeline-item">
                       <div className="timeline-dot" style={{ background: ev.newStatus === 'SHIPPED' ? 'var(--green-500)' : 'var(--purple-500)' }} />
                       <div className="timeline-content">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 700, fontSize: 12 }}>
                             {ev.oldStatus ? `${ev.oldStatus} → ` : ''}
                             <span style={{ color: ev.newStatus === 'SHIPPED' ? 'var(--green-700)' : 'var(--purple-700)' }}>
                               {ev.newStatus}
                             </span>
                           </span>
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatTs(ev.timestamp)}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatTs(ev.timestamp)}</span>
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
                           {ev.eventSource === 'MOBILE_SCAN' ? <Smartphone size={11} /> : <Monitor size={11} />}

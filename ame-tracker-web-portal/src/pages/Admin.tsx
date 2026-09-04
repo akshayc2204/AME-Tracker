@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   FolderSync, RefreshCw, Save, FolderOpen, CheckCircle, User, Pencil,
-  AlertCircle, Archive,
+  AlertCircle, Archive, Smartphone, Plus, X,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { api } from '../services/api';
@@ -10,6 +10,15 @@ import {
   FOLDER_PATH_PLACEHOLDER,
   isAbsoluteFolderPath,
 } from '../utils/pathUtils';
+
+type PortalUser = {
+  id: number;
+  email: string;
+  fullName: string;
+  role: string;
+  isActive: number;
+  createdAt?: string;
+};
 
 type FolderPair = {
   pairKey: string;
@@ -138,6 +147,15 @@ export default function Admin() {
     archivedAt: string;
   }>>([]);
   const [archivesLoading, setArchivesLoading] = useState(true);
+  const [operators, setOperators] = useState<PortalUser[]>([]);
+  const [operatorsLoading, setOperatorsLoading] = useState(true);
+  const [operatorMsg, setOperatorMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [editingOperatorId, setEditingOperatorId] = useState<number | null>(null);
+  const [creatingOperator, setCreatingOperator] = useState(false);
+  const [savingOperator, setSavingOperator] = useState(false);
+  const [opName, setOpName] = useState('');
+  const [opEmail, setOpEmail] = useState('');
+  const [opPassword, setOpPassword] = useState('');
 
   function applyUser(user: { fullName?: string; email?: string }) {
     const name = (user.fullName || '').trim() || fullName.trim();
@@ -151,6 +169,33 @@ export default function Admin() {
     }));
   }
 
+  async function loadOperators() {
+    setOperatorsLoading(true);
+    try {
+      const users = await api.listUsers();
+      const list = Array.isArray(users) ? users : [];
+      setOperators(
+        list
+          .filter((u) => String(u.role || '').toUpperCase() === 'OPERATOR')
+          .map((u) => ({
+            id: u.id,
+            email: u.email,
+            fullName: u.fullName || u.name || '',
+            role: u.role,
+            isActive: u.isActive,
+            createdAt: u.createdAt,
+          })),
+      );
+    } catch (err: unknown) {
+      setOperatorMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Could not load operators',
+      });
+    } finally {
+      setOperatorsLoading(false);
+    }
+  }
+
   async function load() {
     setLoading(true);
     setArchivesLoading(true);
@@ -159,6 +204,7 @@ export default function Admin() {
         api.getMe().catch(() => null),
         api.getFolderSyncStatus().catch(() => null),
         api.getJobArchives().catch(() => []),
+        loadOperators(),
       ]);
       if (me) applyUser(me);
       if (status) {
@@ -194,6 +240,95 @@ export default function Admin() {
     const t = window.setTimeout(() => setFolderMsg(null), 4000);
     return () => window.clearTimeout(t);
   }, [folderMsg]);
+
+  useEffect(() => {
+    if (operatorMsg?.type !== 'success') return;
+    const t = window.setTimeout(() => setOperatorMsg(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [operatorMsg]);
+
+  function resetOperatorForm() {
+    setOpName('');
+    setOpEmail('');
+    setOpPassword('');
+    setEditingOperatorId(null);
+    setCreatingOperator(false);
+  }
+
+  function startCreateOperator() {
+    setOperatorMsg(null);
+    setEditingOperatorId(null);
+    setCreatingOperator(true);
+    setOpName('');
+    setOpEmail('');
+    setOpPassword('');
+  }
+
+  function startEditOperator(op: PortalUser) {
+    setOperatorMsg(null);
+    setCreatingOperator(false);
+    setEditingOperatorId(op.id);
+    setOpName(op.fullName || '');
+    setOpEmail(op.email || '');
+    setOpPassword('');
+  }
+
+  async function handleSaveOperator(e: React.FormEvent) {
+    e.preventDefault();
+    setOperatorMsg(null);
+    const name = opName.trim();
+    const nextEmail = opEmail.trim().toLowerCase();
+    const password = opPassword.trim();
+
+    if (name.length < 2) {
+      setOperatorMsg({ type: 'error', text: 'Operator name must be at least 2 characters.' });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      setOperatorMsg({ type: 'error', text: 'Enter a valid email address.' });
+      return;
+    }
+    if (creatingOperator && password.length < 6) {
+      setOperatorMsg({ type: 'error', text: 'Password must be at least 6 characters.' });
+      return;
+    }
+    if (!creatingOperator && password && password.length < 6) {
+      setOperatorMsg({ type: 'error', text: 'Password must be at least 6 characters.' });
+      return;
+    }
+
+    setSavingOperator(true);
+    try {
+      if (creatingOperator) {
+        await api.createUser({
+          email: nextEmail,
+          password,
+          fullName: name,
+          role: 'OPERATOR',
+        });
+        setOperatorMsg({ type: 'success', text: 'Mobile operator created.' });
+      } else if (editingOperatorId != null) {
+        await api.updateUser(editingOperatorId, {
+          fullName: name,
+          email: nextEmail,
+          ...(password ? { newPassword: password } : {}),
+        });
+        setOperatorMsg({
+          type: 'success',
+          text: password ? 'Operator name and password updated.' : 'Operator updated.',
+        });
+      }
+      resetOperatorForm();
+      await loadOperators();
+    } catch (err: unknown) {
+      setOperatorMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Could not save operator',
+      });
+    } finally {
+      setSavingOperator(false);
+    }
+  }
 
   function startEditProfile() {
     setFullName(currentUser.name || fullName);
@@ -305,166 +440,276 @@ export default function Admin() {
   const pairs = folderStatus?.pairs ?? [];
   const syncOn = folderStatus?.enabled !== false;
   const initials = (fullName || currentUser.avatar || 'A').slice(0, 2).toUpperCase();
+  const activeOperators = operators.filter((o) => o.isActive === 1).length;
+  const operatorFormOpen = creatingOperator || editingOperatorId != null;
 
   return (
     <div className="admin-page">
-      <div className="page-header">
-        <h2>Admin</h2>
-        <p>Update your account and manage how jobs are imported from the folder.</p>
-      </div>
-
-      <div className="card admin-profile-card">
-        <div className="card-header">
-          <div>
-            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <User size={16} color="var(--green-600)" />
-              Your account
-            </div>
-            <div className="card-subtitle">Role, email, and password used to sign in to AME Tracker.</div>
-          </div>
-          {!editingProfile && (
-            <button className="btn btn-secondary btn-sm" type="button" onClick={startEditProfile}>
-              <Pencil size={14} />
-              Edit profile
-            </button>
-          )}
+      <div className="page-header admin-hero">
+        <div>
+          <h2>Admin</h2>
+          <p>Manage your account, mobile operators, and automatic job imports.</p>
         </div>
-
-        {editingProfile ? (
-          <form className="card-body" onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div className="admin-form-grid">
-              <div className="form-group">
-                <label className="form-label">Role</label>
-                <input
-                  className="form-input"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Admin"
-                  disabled={savingProfile}
-                  autoComplete="organization-title"
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Email</label>
-                <input
-                  className="form-input"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  disabled={savingProfile}
-                  autoComplete="email"
-                />
-                <div className="form-hint">Used to sign in. You can change this later.</div>
-              </div>
-              <div className="form-group admin-form-grid-span">
-                <label className="form-label">New password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Leave blank to keep the current password"
-                  disabled={savingProfile}
-                  autoComplete="new-password"
-                />
-                <div className="form-hint">Optional. At least 6 characters if you set a new one.</div>
-              </div>
-            </div>
-            {profileMsg && <Message type={profileMsg.type} text={profileMsg.text} />}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn btn-secondary" type="button" onClick={cancelEditProfile} disabled={savingProfile}>
-                Cancel
-              </button>
-              <button className="btn btn-primary" type="submit" disabled={savingProfile}>
-                {savingProfile ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-                {savingProfile ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
-          </form>
-        ) : (
-          <div className="card-body">
-            <div className="admin-profile-view">
-              <div className="user-avatar admin-profile-avatar">{initials}</div>
-              <div className="admin-profile-fields">
-                <div>
-                  <div className="form-label" style={{ color: 'var(--text-muted)' }}>Role</div>
-                  <div className="admin-profile-value">{fullName || '—'}</div>
-                </div>
-                <div>
-                  <div className="form-label" style={{ color: 'var(--text-muted)' }}>Email</div>
-                  <div className="admin-profile-value">{email || '—'}</div>
-                </div>
-                <div>
-                  <div className="form-label" style={{ color: 'var(--text-muted)' }}>Password</div>
-                  <div className="admin-profile-value" style={{ letterSpacing: 2 }}>••••••••</div>
-                </div>
-              </div>
-            </div>
-            {profileMsg && <div style={{ marginTop: 16 }}><Message type={profileMsg.type} text={profileMsg.text} /></div>}
+        <div className="admin-hero-meta">
+          <div className="admin-meta-chip">
+            <Smartphone size={14} />
+            <span>
+              <strong>{operatorsLoading ? '—' : activeOperators}</strong>
+              {' '}active operator{activeOperators === 1 ? '' : 's'}
+            </span>
           </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Archive size={16} color="var(--slate-500)" />
-              Archived jobs
-            </div>
-            <div className="card-subtitle">
-              Jobs deleted from Projects. Part details are not kept — only total parts at delete time.
-            </div>
+          <div className={`admin-meta-chip ${syncOn ? 'is-ok' : 'is-warn'}`}>
+            <FolderSync size={14} />
+            <span>{syncOn ? 'Auto-sync on' : 'Auto-sync off'}</span>
+          </div>
+          <div className="admin-meta-chip">
+            <Archive size={14} />
+            <span>
+              <strong>{archivesLoading ? '—' : archivedJobs.length}</strong>
+              {' '}archived
+            </span>
           </div>
         </div>
-        <div className="card-body" style={{ paddingTop: 0 }}>
-          {archivesLoading ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</p>
-          ) : archivedJobs.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No archived jobs yet.</p>
+      </div>
+
+      <div className="admin-section-label">Access</div>
+      <div className="admin-people-grid">
+        <div className="card admin-panel">
+          <div className="card-header">
+            <div className="admin-panel-heading">
+              <div className="admin-icon-badge">
+                <User size={16} />
+              </div>
+              <div>
+                <div className="card-title">Your account</div>
+                <div className="card-subtitle">Sign-in details for this portal.</div>
+              </div>
+            </div>
+            {!editingProfile && (
+              <button className="btn btn-secondary btn-sm" type="button" onClick={startEditProfile}>
+                <Pencil size={14} />
+                Edit
+              </button>
+            )}
+          </div>
+
+          {editingProfile ? (
+            <form className="card-body admin-stack" onSubmit={handleSaveProfile}>
+              <div className="admin-form-grid">
+                <div className="form-group">
+                  <label className="form-label">Display name</label>
+                  <input
+                    className="form-input"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Admin"
+                    disabled={savingProfile}
+                    autoComplete="organization-title"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Email</label>
+                  <input
+                    className="form-input"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    disabled={savingProfile}
+                    autoComplete="email"
+                  />
+                </div>
+                <div className="form-group admin-form-grid-span">
+                  <label className="form-label">New password</label>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Leave blank to keep current password"
+                    disabled={savingProfile}
+                    autoComplete="new-password"
+                  />
+                  <div className="form-hint">Optional. At least 6 characters if you set a new one.</div>
+                </div>
+              </div>
+              {profileMsg && <Message type={profileMsg.type} text={profileMsg.text} />}
+              <div className="admin-form-actions">
+                <button className="btn btn-secondary" type="button" onClick={cancelEditProfile} disabled={savingProfile}>
+                  Cancel
+                </button>
+                <button className="btn btn-primary" type="submit" disabled={savingProfile}>
+                  {savingProfile ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+                  {savingProfile ? 'Saving…' : 'Save changes'}
+                </button>
+              </div>
+            </form>
           ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Job</th>
-                    <th>Project</th>
-                    <th>Job ID</th>
-                    <th>Upload</th>
-                    <th>Total parts</th>
-                    <th>Deleted</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {archivedJobs.map((row) => (
-                    <tr key={row.id}>
-                      <td style={{ fontWeight: 600 }}>{row.jobName}</td>
-                      <td>{row.projectName}</td>
-                      <td className="td-mono">{row.sourceJobId}</td>
-                      <td>v{row.importVersion}</td>
-                      <td style={{ fontWeight: 700 }}>{row.totalParts}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                        {formatDateTime(row.archivedAt)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="card-body">
+              <div className="admin-profile-view">
+                <div className="user-avatar admin-profile-avatar">{initials}</div>
+                <div className="admin-profile-fields">
+                  <div>
+                    <div className="admin-field-label">Name</div>
+                    <div className="admin-profile-value">{fullName || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="admin-field-label">Email</div>
+                    <div className="admin-profile-value">{email || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="admin-field-label">Password</div>
+                    <div className="admin-profile-value admin-password-mask">••••••••</div>
+                  </div>
+                </div>
+              </div>
+              {profileMsg && <div className="admin-inline-msg"><Message type={profileMsg.type} text={profileMsg.text} /></div>}
             </div>
           )}
         </div>
+
+        <div className="card admin-panel">
+          <div className="card-header">
+            <div className="admin-panel-heading">
+              <div className="admin-icon-badge is-blue">
+                <Smartphone size={16} />
+              </div>
+              <div>
+                <div className="card-title">Mobile operators</div>
+                <div className="card-subtitle">Names and passwords for the mobile app.</div>
+              </div>
+            </div>
+            {!operatorFormOpen && (
+              <button className="btn btn-primary btn-sm" type="button" onClick={startCreateOperator}>
+                <Plus size={14} />
+                Add
+              </button>
+            )}
+          </div>
+
+          {operatorFormOpen && (
+            <form className="card-body admin-stack admin-operator-form" onSubmit={handleSaveOperator}>
+              <div className="admin-form-banner">
+                {creatingOperator ? 'New mobile operator' : 'Edit operator'}
+              </div>
+              <div className="admin-form-grid">
+                <div className="form-group">
+                  <label className="form-label">Name</label>
+                  <input
+                    className="form-input"
+                    value={opName}
+                    onChange={(e) => setOpName(e.target.value)}
+                    placeholder="Operator name"
+                    disabled={savingOperator}
+                    autoComplete="name"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Email</label>
+                  <input
+                    className="form-input"
+                    type="email"
+                    value={opEmail}
+                    onChange={(e) => setOpEmail(e.target.value)}
+                    placeholder="operator@example.com"
+                    disabled={savingOperator}
+                    autoComplete="email"
+                  />
+                </div>
+                <div className="form-group admin-form-grid-span">
+                  <label className="form-label">{creatingOperator ? 'Password' : 'New password'}</label>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={opPassword}
+                    onChange={(e) => setOpPassword(e.target.value)}
+                    placeholder={creatingOperator ? 'At least 6 characters' : 'Leave blank to keep current password'}
+                    disabled={savingOperator}
+                    autoComplete="new-password"
+                  />
+                  {!creatingOperator && (
+                    <div className="form-hint">Optional. At least 6 characters if you set a new one.</div>
+                  )}
+                </div>
+              </div>
+              {operatorMsg && <Message type={operatorMsg.type} text={operatorMsg.text} />}
+              <div className="admin-form-actions">
+                <button className="btn btn-secondary" type="button" onClick={resetOperatorForm} disabled={savingOperator}>
+                  <X size={14} />
+                  Cancel
+                </button>
+                <button className="btn btn-primary" type="submit" disabled={savingOperator}>
+                  {savingOperator ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+                  {savingOperator ? 'Saving…' : creatingOperator ? 'Create operator' : 'Save changes'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className={`card-body ${operatorFormOpen ? 'admin-operator-list-padded' : ''}`}>
+            {!operatorFormOpen && operatorMsg && (
+              <div className="admin-inline-msg">
+                <Message type={operatorMsg.type} text={operatorMsg.text} />
+              </div>
+            )}
+            {operatorsLoading ? (
+              <div className="admin-soft-empty">
+                <RefreshCw size={16} className="animate-spin" />
+                Loading operators…
+              </div>
+            ) : operators.length === 0 ? (
+              <div className="admin-soft-empty">
+                <Smartphone size={22} />
+                <div>
+                  <strong>No operators yet</strong>
+                  <div>Add one so staff can sign in on the mobile app.</div>
+                </div>
+              </div>
+            ) : (
+              <div className="admin-operator-list">
+                {operators.map((op) => {
+                  const opInitials = (op.fullName || op.email || 'OP').slice(0, 2).toUpperCase();
+                  const isEditing = editingOperatorId === op.id;
+                  return (
+                    <div key={op.id} className={`admin-operator-row ${isEditing ? 'is-active' : ''}`}>
+                      <div className="admin-operator-avatar">{opInitials}</div>
+                      <div className="admin-operator-info">
+                        <div className="admin-operator-name">{op.fullName || '—'}</div>
+                        <div className="admin-operator-email">{op.email}</div>
+                      </div>
+                      <span className={`badge ${op.isActive === 1 ? 'badge-success' : 'badge-failed'}`}>
+                        {op.isActive === 1 ? 'Active' : 'Inactive'}
+                      </span>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        type="button"
+                        onClick={() => startEditOperator(op)}
+                        disabled={savingOperator || operatorFormOpen}
+                      >
+                        <Pencil size={14} />
+                        Edit
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div className="card">
+      <div className="admin-section-label">Imports</div>
+      <div className="card admin-panel admin-sync-panel">
         <div className="card-header">
-          <div>
-            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <FolderSync size={16} color="var(--green-600)" />
-              Job folder sync
+          <div className="admin-panel-heading">
+            <div className="admin-icon-badge">
+              <FolderSync size={16} />
             </div>
-            <div className="card-subtitle">
-              Matching <code>.t4vjob</code> and <code>.xlsx</code> files in this folder become projects automatically.
+            <div>
+              <div className="card-title">Job folder sync</div>
+              <div className="card-subtitle">
+                Matching <code>.t4vjob</code> and <code>.xlsx</code> files become projects automatically.
+              </div>
             </div>
           </div>
           <div className="admin-sync-actions">
@@ -482,7 +727,7 @@ export default function Admin() {
           </div>
         </div>
 
-        <form className="card-body" onSubmit={handleSaveFolder} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <form className="card-body admin-stack" onSubmit={handleSaveFolder}>
           <div className="admin-sync-stats">
             <div className="admin-sync-stat">
               <span>Last check</span>
@@ -506,17 +751,16 @@ export default function Admin() {
             </div>
           </div>
 
-          <div className="admin-form-grid">
+          <div className="admin-form-grid admin-sync-form-grid">
             <div className="form-group admin-form-grid-span">
               <label className="form-label">Watch folder</label>
-              <div style={{ position: 'relative' }}>
-                <FolderOpen size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <div className="admin-path-input">
+                <FolderOpen size={16} />
                 <input
                   className="form-input"
                   value={folderPath}
                   onChange={(e) => setFolderPath(e.target.value)}
                   placeholder={FOLDER_PATH_PLACEHOLDER}
-                  style={{ paddingLeft: 36, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}
                   disabled={savingFolder}
                   autoComplete="off"
                 />
@@ -543,12 +787,10 @@ export default function Admin() {
             </div>
           </div>
 
-          {folderStatus?.error && (
-            <Message type="error" text={folderStatus.error} />
-          )}
+          {folderStatus?.error && <Message type="error" text={folderStatus.error} />}
           {folderMsg && <Message type={folderMsg.type} text={folderMsg.text} />}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div className="admin-form-actions">
             <button className="btn btn-primary" type="submit" disabled={savingFolder || syncing}>
               {savingFolder ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
               {savingFolder ? 'Saving…' : 'Save folder settings'}
@@ -602,10 +844,8 @@ export default function Admin() {
                 pairs.map((pair) => (
                   <tr key={pair.pairKey}>
                     <td>
-                      <div style={{ fontWeight: 700 }}>{pair.jobName || pair.pairKey}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        {pair.sourceJobId || pair.pairKey}
-                      </div>
+                      <div className="admin-job-name">{pair.jobName || pair.pairKey}</div>
+                      <div className="admin-job-id">{pair.sourceJobId || pair.pairKey}</div>
                     </td>
                     <td>
                       <div className="admin-file-row">
@@ -623,10 +863,10 @@ export default function Admin() {
                         {folderStatusLabel(pair.status)}
                       </span>
                     </td>
-                    <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <td className="admin-muted-cell">
                       {formatRelative(pair.lastSyncedAt)}
                       {pair.message ? (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{pair.message}</div>
+                        <div className="admin-job-msg">{pair.message}</div>
                       ) : null}
                     </td>
                   </tr>
@@ -634,6 +874,68 @@ export default function Admin() {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div className="card admin-panel admin-archive-panel">
+        <div className="card-header">
+          <div className="admin-panel-heading">
+            <div className="admin-icon-badge is-slate">
+              <Archive size={16} />
+            </div>
+            <div>
+              <div className="card-title">Archived jobs</div>
+              <div className="card-subtitle">
+                Jobs deleted from Projects. Only totals are kept — not part details.
+              </div>
+            </div>
+          </div>
+          {!archivesLoading && archivedJobs.length > 0 && (
+            <span className="admin-count-pill">{archivedJobs.length}</span>
+          )}
+        </div>
+        <div className="card-body admin-archive-body">
+          {archivesLoading ? (
+            <div className="admin-soft-empty">
+              <RefreshCw size={16} className="animate-spin" />
+              Loading…
+            </div>
+          ) : archivedJobs.length === 0 ? (
+            <div className="admin-soft-empty">
+              <Archive size={22} />
+              <div>
+                <strong>No archived jobs</strong>
+                <div>Deleted projects will show up here.</div>
+              </div>
+            </div>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Job</th>
+                    <th>Project</th>
+                    <th>Job ID</th>
+                    <th>Upload</th>
+                    <th>Total parts</th>
+                    <th>Deleted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {archivedJobs.map((row) => (
+                    <tr key={row.id}>
+                      <td className="admin-job-name">{row.jobName}</td>
+                      <td>{row.projectName}</td>
+                      <td className="td-mono">{row.sourceJobId}</td>
+                      <td>v{row.importVersion}</td>
+                      <td className="admin-parts-count">{row.totalParts}</td>
+                      <td className="admin-muted-cell">{formatDateTime(row.archivedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

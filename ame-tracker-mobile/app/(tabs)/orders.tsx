@@ -5,11 +5,13 @@ import {
   BackHandler, Modal,
 } from 'react-native'
 import { useFocusEffect } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   Truck, FolderKanban, Settings, Package,
   Search, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft,
   List, Layers, RefreshCw, Calendar, X,
 } from 'lucide-react-native'
+import { tabBarScrollInset } from '@/constants/layout'
 import { listTransitsGrouped } from '@/services/transits'
 import type { VehicleDispatchGroup, VehicleProjectItem, VehicleJobItem, VehiclePartItem } from '@/types/api'
 
@@ -29,6 +31,12 @@ type FlatPart = VehiclePartItem & {
 }
 
 /* ─── Helpers ─── */
+/** Keeps the last row clear of the floating tab bar, which overlays the screen. */
+function useScrollBottomInset() {
+  const insets = useSafeAreaInsets()
+  return { paddingBottom: tabBarScrollInset(insets.bottom) }
+}
+
 function formatTimestamp(iso: string) {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -245,6 +253,7 @@ function DispatchListView({
   const [dateFilter, setDateFilter] = useState<DateFilter>('today')
   const [customDate, setCustomDate] = useState('')
   const [showCalendar, setShowCalendar] = useState(false)
+  const scrollInset = useScrollBottomInset()
 
   const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d }, [])
   const yesterday = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() - 1); return d }, [today])
@@ -363,7 +372,7 @@ function DispatchListView({
           <Text style={styles.loadingText}>Loading dispatches…</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.listContent, scrollInset]} showsVerticalScrollIndicator={false}>
           {filtered.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Truck size={48} color="#D1D5DB" />
@@ -445,6 +454,7 @@ function VehicleDetailView({
 }) {
   const allParts = useMemo(() => flattenParts(vehicle), [vehicle])
   const [partSearch, setPartSearch] = useState('')
+  const scrollInset = useScrollBottomInset()
 
   const filteredParts = useMemo(() => {
     if (!partSearch.trim()) return allParts
@@ -510,7 +520,7 @@ function VehicleDetailView({
 
       {/* Tab Content */}
       {tab === 'all' && (
-        <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.tabContent, scrollInset]} showsVerticalScrollIndicator={false}>
           <View style={styles.searchContainer}>
             <Search size={15} color="#9CA3AF" />
             <TextInput
@@ -532,7 +542,7 @@ function VehicleDetailView({
       )}
 
       {tab === 'project' && (
-        <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.tabContent, scrollInset]} showsVerticalScrollIndicator={false}>
           <SectionHeader title="Projects" count={vehicle.projects?.length || 0} />
           {(!vehicle.projects || vehicle.projects.length === 0) ? (
             <View style={styles.emptyChildCard}>
@@ -563,12 +573,12 @@ function VehicleDetailView({
       )}
 
       {tab === 'job' && (
-        <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.tabContent, scrollInset]} showsVerticalScrollIndicator={false}>
           <SectionHeader title="Jobs" count={totalJobs} />
           {vehicle.projects?.flatMap(project =>
             project.jobs?.map(job => (
               <TouchableOpacity
-                key={job.jobCode} style={styles.jobCard}
+                key={`${project.projectName}-${job.jobCode}`} style={styles.jobCard}
                 onPress={() => onSelectJob(project, job)} activeOpacity={0.7}
               >
                 <View style={styles.jobIconBadge}>
@@ -596,6 +606,7 @@ function ProjectDetailView({ vehicle, project, onBack, onSelectJob }: {
   vehicle: VehicleDispatchGroup; project: VehicleProjectItem;
   onBack: () => void; onSelectJob: (j: VehicleJobItem) => void;
 }) {
+  const scrollInset = useScrollBottomInset()
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -618,7 +629,7 @@ function ProjectDetailView({ vehicle, project, onBack, onSelectJob }: {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.tabContent, scrollInset]} showsVerticalScrollIndicator={false}>
         <SectionHeader title="Jobs" count={project.jobs?.length || 0} />
         {(!project.jobs || project.jobs.length === 0) ? (
           <View style={styles.emptyChildCard}>
@@ -653,6 +664,7 @@ function JobDetailView({ vehicle, project, job, onBack }: {
   vehicle: VehicleDispatchGroup; project: VehicleProjectItem;
   job: VehicleJobItem; onBack: () => void;
 }) {
+  const scrollInset = useScrollBottomInset()
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -680,7 +692,7 @@ function JobDetailView({ vehicle, project, job, onBack }: {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.tabContent, scrollInset]} showsVerticalScrollIndicator={false}>
         <SectionHeader title="Parts Manifest" count={job.parts?.length || 0} />
         {(!job.parts || job.parts.length === 0) ? (
           <View style={styles.emptyChildCard}>
@@ -787,7 +799,7 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: 14, padding: 0, color: '#111827' },
 
   // List
-  listContent: { padding: 16, paddingBottom: 100, gap: 10 },
+  listContent: { padding: 16, gap: 10 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280', fontWeight: '600' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, paddingHorizontal: 20 },
@@ -834,7 +846,7 @@ const styles = StyleSheet.create({
   tabCountTextActive: { color: '#047857' },
 
   // Tab Content
-  tabContent: { padding: 16, paddingBottom: 100, gap: 8 },
+  tabContent: { padding: 16, gap: 8 },
 
   // Section Header
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },

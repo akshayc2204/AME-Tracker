@@ -33,6 +33,11 @@ async function bootstrap() {
   const uploadRoot = config.get<string>('STORAGE_LOCAL_PATH', './uploads')
   app.useStaticAssets(join(process.cwd(), uploadRoot), { prefix: '/uploads/' })
 
+  // Lightweight reachability check for mobile / LAN discovery (no auth).
+  app.getHttpAdapter().get('/api/health', (_req: unknown, res: { json: (body: unknown) => void }) => {
+    res.json({ success: true, data: { ok: true, service: 'ame-tracker-api' } })
+  })
+
   // Socket.IO adapter — enables @WebSocketGateway support
   app.useWebSocketAdapter(new IoAdapter(app))
 

@@ -12,17 +12,27 @@ import {
   Platform,
   ScrollView,
 } from 'react-native'
+import { Eye, EyeOff } from 'lucide-react-native'
 import { useAuth } from '@/context/AuthContext'
 import { ApiClientError } from '@/services/api'
 
+// Prefilled so operators can sign in with one tap on shared depot devices.
+const DEFAULT_EMAIL = 'operator@ametracker.local'
+const DEFAULT_PASSWORD = 'Password123!'
+
 export default function LoginScreen() {
-  const { login, submitting: _sub, isLoading: _loading } = useAuth() as any
-  const [email, setEmail] = useState('operator@ametracker.local')
-  const [password, setPassword] = useState('Password123!')
+  const { login } = useAuth()
+  const [email, setEmail] = useState(DEFAULT_EMAIL)
+  const [password, setPassword] = useState(DEFAULT_PASSWORD)
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      setError('Enter your email and password to sign in.')
+      return
+    }
     setError('')
     setSubmitting(true)
     try {
@@ -70,15 +80,32 @@ export default function LoginScreen() {
             placeholderTextColor="#9CA3AF"
           />
           <Text style={styles.label}>Password</Text>
-          <Text style={styles.hint}>Current password: Password123!</Text>
-          <TextInput
-            style={styles.input}
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Password"
-            placeholderTextColor="#9CA3AF"
-          />
+          <View style={styles.passwordRow}>
+            <TextInput
+              style={styles.passwordInput}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Password"
+              placeholderTextColor="#9CA3AF"
+              returnKeyType="go"
+              onSubmitEditing={() => void handleLogin()}
+            />
+            <TouchableOpacity
+              style={styles.passwordToggle}
+              onPress={() => setShowPassword((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+            >
+              {showPassword ? (
+                <EyeOff size={20} color="#6B7280" />
+              ) : (
+                <Eye size={20} color="#6B7280" />
+              )}
+            </TouchableOpacity>
+          </View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <TouchableOpacity
             style={[styles.button, submitting && styles.buttonDisabled]}
@@ -125,7 +152,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#111827',
   },
-  hint: { fontSize: 12, color: '#6B7280', marginBottom: 4, fontStyle: 'italic' },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#111827',
+  },
+  passwordToggle: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
   error: { color: '#DC2626', marginTop: 8, fontWeight: '600' },
   button: {
     marginTop: 16,

@@ -657,6 +657,14 @@ export class TransitsService {
       )
     }
 
+    if (!dispatch.vehicleNumber?.trim()) {
+      throw new BusinessError(
+        'VEHICLE_NUMBER_REQUIRED',
+        'Enter a vehicle number before completing this dispatch.',
+        400,
+      )
+    }
+
     const completed = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.dispatch.update({
         where: { id: dispatch.id },

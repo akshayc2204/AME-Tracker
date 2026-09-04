@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -10,7 +10,10 @@ import {
   ActivityIndicator,
   DeviceEventEmitter,
   NativeModules,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   CameraView,
   useCameraPermissions,
@@ -36,6 +39,7 @@ export function ScanCameraModal({
   onClose,
   onScan,
 }: ScanCameraModalProps) {
+  const insets = useSafeAreaInsets()
   const [hasPermission, requestPermission] = useCameraPermissions()
   const [flashEnabled, setFlashEnabled] = useState(false)
   const [scanned, setScanned] = useState(false)
@@ -43,7 +47,20 @@ export function ScanCameraModal({
   const scanBufferRef = useRef('')
   const lastKeypressTimeRef = useRef(0)
   const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isTypingInFieldRef = useRef(false)
+
+  // The hardware-scanner listeners below are registered once per open, so they
+  // must read `busy`/`onScan` through refs or they keep firing stale values and
+  // a second scan slips through while the first is still being validated.
+  const busyRef = useRef(busy)
+  const onScanRef = useRef(onScan)
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
+  useEffect(() => {
+    onScanRef.current = onScan
+  }, [onScan])
 
   const sendCommand = (action: string, extraData?: unknown) => {
     try {
@@ -106,11 +123,11 @@ export function ScanCameraModal({
     }
   }
 
-  const emitScan = (code: string) => {
+  const emitScan = useCallback((code: string) => {
     const clean = code.trim()
-    if (!clean || busy) return
-    onScan(clean)
-  }
+    if (!clean || busyRef.current) return
+    onScanRef.current(clean)
+  }, [])
 
   useEffect(() => {
     if (!visible) return
@@ -144,13 +161,15 @@ export function ScanCameraModal({
       zebra.remove()
       barcode.remove()
       if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
+      if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current)
     }
   }, [visible])
 
   const handleBarcodeScanned = (result: BarcodeScanningResult) => {
     if (scanned || busy) return
     setScanned(true)
-    setTimeout(() => {
+    if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current)
+    resetTimeoutRef.current = setTimeout(() => {
       setScanned(false)
       emitScan(result.data)
     }, 500)
@@ -163,7 +182,10 @@ export function ScanCameraModal({
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      <View style={styles.cameraContainer}>
+      <KeyboardAvoidingView
+        style={styles.cameraContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
         <StatusBar barStyle="light-content" backgroundColor="#000000" />
         <View style={styles.cameraHeader}>
           <TouchableOpacity style={styles.cameraHeaderButton} onPress={onClose}>
@@ -239,7 +261,12 @@ export function ScanCameraModal({
           </View>
         </View>
 
-        <View style={styles.manualSection}>
+        <View
+          style={[
+            styles.manualSection,
+            { paddingBottom: Math.max(insets.bottom, 20) },
+          ]}
+        >
           <Text style={styles.sectionTitle}>Or Enter Code Manually</Text>
           <View style={styles.inputContainer}>
             <TextInput
@@ -299,7 +326,7 @@ export function ScanCameraModal({
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   )
 }
@@ -387,7 +414,7 @@ const styles = StyleSheet.create({
   },
   manualSection: {
     backgroundColor: '#F9FAFB',
-    paddingVertical: 20,
+    paddingTop: 20,
     paddingHorizontal: 20,
   },
   sectionTitle: {

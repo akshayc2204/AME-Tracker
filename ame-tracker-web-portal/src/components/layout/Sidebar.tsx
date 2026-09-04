@@ -4,7 +4,6 @@ import {
   Truck, BarChart3, UserCog,
   LogOut
 } from 'lucide-react';
-import { useApp } from '../../store/AppContext';
 import { api } from '../../services/api';
 
 interface NavItem {
@@ -27,20 +26,19 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 export default function Sidebar() {
-  const { currentUser } = useApp();
   const navigate = useNavigate();
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '18px 20px' }}>
+      <div className="sidebar-logo">
         <img
           src="/images.png"
           alt="AME Tracker Logo"
-          style={{ width: 75, height: 75, objectFit: 'contain', borderRadius: 10, background: '#ffffff', padding: 3, boxShadow: '0 2px 10px rgba(0,0,0,0.18)', flexShrink: 0 }}
+          className="sidebar-logo-img"
         />
         <div className="sidebar-logo-text">
-          <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#ffffff', letterSpacing: '-0.02em', margin: 0 }}>AME Tracker</h1>
-          <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.75)', fontWeight: 600 }}>Parts & Shipment</span>
+          <h1>AME Tracker</h1>
+          <span>Parts & Shipment</span>
         </div>
       </div>
 
@@ -59,21 +57,9 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <div
-          className="sidebar-user"
-          style={{ cursor: 'pointer' }}
-          onClick={() => navigate('/admin')}
-          title="Account settings"
-        >
-          <div className="user-avatar">{currentUser.avatar}</div>
-          <div className="sidebar-user-info">
-            <strong>{currentUser.name}</strong>
-            {currentUser.email ? <span>{currentUser.email}</span> : null}
-          </div>
-        </div>
         <button
           className="sidebar-item"
-          style={{ marginTop: 4, width: '100%', color: 'rgba(255,255,255,0.5)' }}
+          style={{ width: '100%', color: 'rgba(255,255,255,0.5)' }}
           onClick={async () => {
             try {
               await api.logout();

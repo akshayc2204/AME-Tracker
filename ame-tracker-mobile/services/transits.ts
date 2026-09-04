@@ -1,7 +1,7 @@
 import { Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
-import { apiRequest, API_BASE_URL } from '@/services/api'
+import { apiRequest, ensureApiBaseUrl } from '@/services/api'
 import { getAccessToken } from '@/services/auth-storage'
 import type { ClientOrderGroup, ScanPreview, ScanSuccess, TransitSummary } from '@/types/api'
 
@@ -127,7 +127,8 @@ export async function scanTransitProduct(
 
 export async function uploadTruckPhoto(transitId: string, uri: string) {
   const token = await getAccessToken()
-  const uploadUrl = `${API_BASE_URL}/api/transits/${transitId}/photo`
+  const base = await ensureApiBaseUrl()
+  const uploadUrl = `${base}/api/transits/${transitId}/photo`
 
   if (Platform.OS !== 'web' && typeof FileSystem.uploadAsync === 'function') {
     const uploadResult = await (FileSystem as any).uploadAsync(uploadUrl, uri, {

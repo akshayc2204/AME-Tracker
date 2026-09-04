@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import * as bcrypt from 'bcrypt'
 import { PrismaService } from '../prisma/prisma.service'
 
@@ -18,15 +23,7 @@ export class UsersService {
       },
       orderBy: { createdAt: 'desc' },
     })
-    return users.map((u) => ({
-      id: u.id,
-      email: u.email,
-      fullName: u.name,
-      name: u.name,
-      role: u.role,
-      isActive: u.isActive,
-      createdAt: u.createdAt,
-    }))
+    return users.map((u) => this.toDto(u))
   }
 
   async create(data: {
@@ -36,10 +33,22 @@ export class UsersService {
     name?: string
     role?: string
   }) {
+    const email = data.email.toLowerCase().trim()
+    const taken = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    })
+    if (taken) {
+      throw new ConflictException({
+        errorCode: 'EMAIL_IN_USE',
+        message: 'That email is already used by another account',
+      })
+    }
+
     const passwordHash = await bcrypt.hash(data.password, 10)
     const user = await this.prisma.user.create({
       data: {
-        email: data.email.toLowerCase().trim(),
+        email,
         passwordHash,
         name: (data.name || data.fullName || 'User').trim(),
         role: data.role || 'ADMIN',
@@ -54,6 +63,118 @@ export class UsersService {
         createdAt: true,
       },
     })
+    return this.toDto(user)
+  }
+
+  async update(
+    id: number,
+    data: {
+      fullName?: string
+      name?: string
+      email?: string
+      newPassword?: string
+      password?: string
+      role?: string
+      isActive?: number
+    },
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id } })
+    if (!user) {
+      throw new NotFoundException({
+        errorCode: 'USER_NOT_FOUND',
+        message: 'User not found',
+      })
+    }
+
+    const nextName = (data.fullName ?? data.name)?.trim()
+    const nextEmail = data.email?.trim().toLowerCase()
+    const nextPassword = data.newPassword ?? data.password
+    const patch: {
+      name?: string
+      email?: string
+      passwordHash?: string
+      role?: string
+      isActive?: number
+    } = {}
+
+    if (nextName) {
+      if (nextName.length < 2) {
+        throw new BadRequestException({
+          errorCode: 'NAME_TOO_SHORT',
+          message: 'Name must be at least 2 characters',
+        })
+      }
+      patch.name = nextName
+    }
+
+    if (nextEmail && nextEmail !== user.email) {
+      const taken = await this.prisma.user.findUnique({
+        where: { email: nextEmail },
+        select: { id: true },
+      })
+      if (taken && taken.id !== id) {
+        throw new ConflictException({
+          errorCode: 'EMAIL_IN_USE',
+          message: 'That email is already used by another account',
+        })
+      }
+      patch.email = nextEmail
+    }
+
+    if (nextPassword) {
+      if (nextPassword.length < 6) {
+        throw new BadRequestException({
+          errorCode: 'PASSWORD_TOO_SHORT',
+          message: 'Password must be at least 6 characters',
+        })
+      }
+      patch.passwordHash = await bcrypt.hash(nextPassword, 10)
+    }
+
+    if (data.role?.trim()) {
+      patch.role = data.role.trim().toUpperCase()
+    }
+
+    if (data.isActive === 0 || data.isActive === 1) {
+      patch.isActive = data.isActive
+    }
+
+    if (
+      !patch.name &&
+      !patch.email &&
+      !patch.passwordHash &&
+      !patch.role &&
+      patch.isActive === undefined
+    ) {
+      throw new BadRequestException({
+        errorCode: 'NOTHING_TO_UPDATE',
+        message: 'Enter a new name, email, or password to save',
+      })
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: patch,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+    })
+    return this.toDto(updated)
+  }
+
+  private toDto(user: {
+    id: number
+    email: string
+    name: string
+    role: string
+    isActive: number
+    createdAt: Date
+  }) {
     return {
       id: user.id,
       email: user.email,

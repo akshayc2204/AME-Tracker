@@ -10,6 +10,7 @@ import {
   Image,
   Alert,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { Check, RotateCcw, X, Flashlight, FlashlightOff } from 'lucide-react-native'
 
@@ -24,6 +25,7 @@ export function VehiclePhotoCameraModal({
   onClose,
   onCapture,
 }: VehiclePhotoCameraModalProps) {
+  const insets = useSafeAreaInsets()
   const cameraRef = useRef<CameraView>(null)
   const [hasPermission, requestPermission] = useCameraPermissions()
   const [flashEnabled, setFlashEnabled] = useState(false)
@@ -133,7 +135,9 @@ export function VehiclePhotoCameraModal({
           )}
         </View>
 
-        <View style={styles.footer}>
+        <View
+          style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
+        >
           {previewUri ? (
             <View style={styles.previewActions}>
               <TouchableOpacity
@@ -215,7 +219,6 @@ const styles = StyleSheet.create({
   footer: {
     backgroundColor: '#111',
     paddingTop: 16,
-    paddingBottom: 36,
     paddingHorizontal: 20,
     alignItems: 'center',
     gap: 14,

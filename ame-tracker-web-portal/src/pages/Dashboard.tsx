@@ -352,8 +352,8 @@ function DateFilterBar({
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#6B7280' }}>
-          <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#6B7280', flexShrink: 0 }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 600 }} className="date-filter-toggle-label">
             {isExpanded ? 'Hide filters' : 'Change date'}
           </span>
           <div style={{
@@ -980,7 +980,7 @@ export default function Dashboard() {
           boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
           display: 'flex', alignItems: 'center', gap: 10,
           fontSize: '0.85rem', fontWeight: 600,
-          animation: 'slideInRight 0.3s ease',
+          animation: 'toastSlideIn 0.3s ease',
           maxWidth: 360,
         }}>
           {socketToast.type === 'complete'
@@ -1138,7 +1138,7 @@ export default function Dashboard() {
         </div>
 
         {/* Events Table */}
-        <div style={{ overflowX: 'auto', maxHeight: 420 }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 420, overscrollBehavior: 'contain' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.8125rem' }}>
             <thead>
               <tr style={{ background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', position: 'sticky', top: 0, zIndex: 10 }}>

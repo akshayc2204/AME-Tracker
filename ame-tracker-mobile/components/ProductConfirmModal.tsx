@@ -4,9 +4,11 @@ import {
   Text,
   StyleSheet,
   Modal,
+  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CheckCircle2, Package, X } from 'lucide-react-native'
 import type { ScanPreview } from '@/types/api'
 
@@ -25,6 +27,7 @@ export function ProductConfirmModal({
   onCancel,
   onConfirm,
 }: ProductConfirmModalProps) {
+  const insets = useSafeAreaInsets()
   const product = preview?.product
 
   return (
@@ -35,55 +38,61 @@ export function ProductConfirmModal({
       onRequestClose={onCancel}
     >
       <View style={styles.backdrop}>
-        <View style={styles.card}>
-          <View style={styles.header}>
-            <View style={styles.iconWrap}>
-              <Package size={28} color="#047857" />
+        <View style={[styles.card, { paddingBottom: insets.bottom + 16 }]}>
+          <ScrollView
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.cardScroll}
+          >
+            <View style={styles.header}>
+              <View style={styles.iconWrap}>
+                <Package size={28} color="#047857" />
+              </View>
+              <TouchableOpacity style={styles.closeBtn} onPress={onCancel}>
+                <X size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={onCancel}>
-              <X size={20} color="#6B7280" />
+
+            <Text style={styles.title}>Confirm Part</Text>
+            <Text style={styles.subtitle}>
+              Review details before loading onto this dispatch
+            </Text>
+
+            {product ? (
+              <View style={styles.details}>
+                <Detail label="Piece #" value={`#${product.pieceNumber}`} />
+                <Detail label="Fitting" value={product.fitting || '—'} />
+                <Detail label="Job" value={product.jobName || product.job} />
+                <Detail label="Project" value={product.project} />
+                <Detail label="Status" value={product.status} />
+                {product.description ? (
+                  <Detail label="Description" value={product.description} />
+                ) : null}
+              </View>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.confirmBtn}
+              onPress={onConfirm}
+              disabled={confirming || !product}
+            >
+              {confirming ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <CheckCircle2 size={20} color="#fff" />
+                  <Text style={styles.confirmText}>CONFIRM & LOAD</Text>
+                </>
+              )}
             </TouchableOpacity>
-          </View>
-
-          <Text style={styles.title}>Confirm Part</Text>
-          <Text style={styles.subtitle}>
-            Review details before loading onto this dispatch
-          </Text>
-
-          {product ? (
-            <View style={styles.details}>
-              <Detail label="Piece #" value={`#${product.pieceNumber}`} />
-              <Detail label="Fitting" value={product.fitting || '—'} />
-              <Detail label="Job" value={product.jobName || product.job} />
-              <Detail label="Project" value={product.project} />
-              <Detail label="Status" value={product.status} />
-              {product.description ? (
-                <Detail label="Description" value={product.description} />
-              ) : null}
-            </View>
-          ) : null}
-
-          <TouchableOpacity
-            style={styles.confirmBtn}
-            onPress={onConfirm}
-            disabled={confirming || !product}
-          >
-            {confirming ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <CheckCircle2 size={20} color="#fff" />
-                <Text style={styles.confirmText}>CONFIRM & LOAD</Text>
-              </>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            onPress={onCancel}
-            disabled={confirming}
-          >
-            <Text style={styles.cancelText}>Cancel</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.cancelBtn}
+              onPress={onCancel}
+              disabled={confirming}
+            >
+              <Text style={styles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -109,8 +118,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 20,
-    paddingBottom: 32,
+    // Parts with a long description used to push the title off the top of the
+    // screen; cap the sheet and let its contents scroll instead.
+    maxHeight: '88%',
+  },
+  cardScroll: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
   },
   header: {
     flexDirection: 'row',

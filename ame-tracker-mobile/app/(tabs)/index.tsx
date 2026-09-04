@@ -15,14 +15,29 @@ import {
   Platform,
 } from 'react-native'
 import { router, useFocusEffect } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Package, Truck, X, ArrowRight, Trash2 } from 'lucide-react-native'
+import { tabBarScrollInset } from '@/constants/layout'
 import { useAuth } from '@/context/AuthContext'
 import { createTransit, deleteTransit, listTransits } from '@/services/transits'
 import { ApiClientError } from '@/services/api'
 import type { TransitSummary } from '@/types/api'
 
+function isToday(iso?: string | null) {
+  if (!iso) return false
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return false
+  const now = new Date()
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  )
+}
+
 export default function HomeScreen() {
   const { user } = useAuth()
+  const insets = useSafeAreaInsets()
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [recent, setRecent] = useState<TransitSummary[]>([])
@@ -36,7 +51,8 @@ export default function HomeScreen() {
     setLoadingRecent(true)
     try {
       const data = await listTransits()
-      setRecent(data.items.slice(0, 8))
+      const todays = data.items.filter((item) => isToday(item.startedAt))
+      setRecent(todays)
     } catch {
       setRecent([])
     } finally {
@@ -123,7 +139,12 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: tabBarScrollInset(insets.bottom) },
+        ]}
+      >
         <TouchableOpacity
           style={styles.primaryButton}
           onPress={openNewDispatchModal}
@@ -138,15 +159,15 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.primaryTitle}>NEW DISPATCH</Text>
           <Text style={styles.primarySubtitle}>
-            Vehicle number and photo are optional
+            Vehicle number required to complete · photo optional
           </Text>
         </TouchableOpacity>
 
-        <Text style={styles.sectionTitle}>Previous Dispatches</Text>
+        <Text style={styles.sectionTitle}>Today's Dispatches</Text>
         {loadingRecent ? (
           <ActivityIndicator color="#078710" style={{ marginTop: 12 }} />
         ) : recent.length === 0 ? (
-          <Text style={styles.emptyText}>No dispatches yet</Text>
+          <Text style={styles.emptyText}>No dispatches today</Text>
         ) : (
           recent.map((item) => (
             <TouchableOpacity
@@ -203,7 +224,7 @@ export default function HomeScreen() {
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Truck size={22} color="#078710" />
-                <Text style={styles.modalTitle}>Vehicle Number (Optional)</Text>
+                <Text style={styles.modalTitle}>Vehicle Number</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setVehicleModalVisible(false)}
@@ -214,11 +235,11 @@ export default function HomeScreen() {
             </View>
 
             <Text style={styles.modalDesc}>
-              You can enter the plate now, skip it, or add vehicle number and photo later — dispatch can still be completed without them.
+              Enter the plate now, or skip and add it later. A vehicle number is required before you can complete the dispatch. Photo is optional.
             </Text>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>VEHICLE NO / PLATE # (OPTIONAL)</Text>
+              <Text style={styles.inputLabel}>VEHICLE NO / PLATE #</Text>
               <TextInput
                 style={styles.input}
                 value={vehicleNumberInput}
@@ -274,7 +295,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   headerSubtitle: { fontSize: 14, color: '#6B7280', marginTop: 3, fontWeight: '500' },
-  content: { padding: 20, paddingBottom: 40 },
+  content: { padding: 20 },
   primaryButton: {
     backgroundColor: '#078710',
     borderRadius: 16,

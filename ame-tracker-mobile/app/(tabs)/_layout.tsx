@@ -1,10 +1,5 @@
 import { Tabs } from 'expo-router'
-import {
-  Home,
-  CircleHelp as HelpCircle,
-  User,
-  ClipboardList,
-} from 'lucide-react-native'
+import { Home, User, ClipboardList } from 'lucide-react-native'
 import React from 'react'
 import {
   View,
@@ -13,14 +8,13 @@ import {
   Platform,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { TAB_BAR_HEIGHT } from '@/constants/layout'
 
 const ACTIVE_COLOR = '#078710'
 const INACTIVE_COLOR = '#9CA3AF'
 const TAB_BG = '#FFFFFF'
 
 type TabBarIconProps = {
-  color: string
-  size: number
   focused: boolean
   icon: React.ReactNode
   label: string
@@ -55,7 +49,12 @@ export default function TabLayout() {
         tabBarShowLabel: false,
         tabBarStyle: [
           styles.tabBar,
-          { paddingBottom: insets.bottom > 0 ? insets.bottom : 8 },
+          {
+            // RN heights are border-box, so the inset has to be added on top of
+            // the bar height or it eats into the icon/label row.
+            height: TAB_BAR_HEIGHT + insets.bottom,
+            paddingBottom: insets.bottom,
+          },
         ],
         tabBarActiveTintColor: ACTIVE_COLOR,
         tabBarInactiveTintColor: INACTIVE_COLOR,
@@ -65,10 +64,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          tabBarIcon: ({ color, size, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <TabItem
-              color={color}
-              size={size}
               focused={focused}
               icon={
                 <Home
@@ -85,10 +82,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="orders"
         options={{
-          tabBarIcon: ({ color, size, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <TabItem
-              color={color}
-              size={size}
               focused={focused}
               icon={
                 <ClipboardList
@@ -109,32 +104,10 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="support"
-        options={{
-          tabBarIcon: ({ color, size, focused }) => (
-            <TabItem
-              color={color}
-              size={size}
-              focused={focused}
-              icon={
-                <HelpCircle
-                  size={22}
-                  color={focused ? ACTIVE_COLOR : INACTIVE_COLOR}
-                  strokeWidth={focused ? 2.2 : 1.8}
-                />
-              }
-              label="Help"
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
         name="profile"
         options={{
-          tabBarIcon: ({ color, size, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <TabItem
-              color={color}
-              size={size}
               focused={focused}
               icon={
                 <User
@@ -157,7 +130,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderTopWidth: 0,
     elevation: 0,
-    height: 70,
     position: 'absolute',
   },
   tabBarBg: {

@@ -15,6 +15,7 @@ import {
   Platform,
 } from 'react-native'
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import * as Haptics from 'expo-haptics'
 import {
@@ -44,13 +45,14 @@ import {
   clearPendingVehiclePhoto,
   getPendingVehiclePhoto,
 } from '@/services/transits'
-import { ApiClientError, API_BASE_URL } from '@/services/api'
+import { ApiClientError, getApiBaseUrl } from '@/services/api'
 import type { ScanPreview, ScanSuccess } from '@/types/api'
 
 function resolveMediaUrl(path?: string | null) {
   if (!path) return null
   if (path.startsWith('http')) return path
-  return `${API_BASE_URL}${path.startsWith('/') ? '' : '/'}${path}`
+  const base = getApiBaseUrl()
+  return `${base}${path.startsWith('/') ? '' : '/'}${path}`
 }
 
 function makeRequestId() {
@@ -103,6 +105,9 @@ function formatEditWindowRemaining(editWindowEndsAt?: string | null, completedAt
 
 export default function TransitScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
+  const insets = useSafeAreaInsets()
+  /** Measured so scroll content clears the pinned footer instead of guessing at it. */
+  const [footerHeight, setFooterHeight] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busyScan, setBusyScan] = useState(false)
   const [scannerOpen, setScannerOpen] = useState(false)
@@ -400,6 +405,21 @@ export default function TransitScreen() {
       return
     }
 
+    if (isUnsetVehicle(transit.transitNumber)) {
+      Alert.alert(
+        'Vehicle Number Required',
+        'Enter a vehicle number before completing this dispatch.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Add Vehicle No',
+            onPress: openEditVehicleModal,
+          },
+        ],
+      )
+      return
+    }
+
     Alert.alert(
       'Complete Dispatch?',
       'Are you sure you want to complete this dispatch?',
@@ -416,15 +436,28 @@ export default function TransitScreen() {
   const confirmComplete = async () => {
     if (!id || !transit || completing) return
 
+    if (isUnsetVehicle(transit.transitNumber)) {
+      Alert.alert(
+        'Vehicle Number Required',
+        'Enter a vehicle number before completing this dispatch.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Add Vehicle No',
+            onPress: openEditVehicleModal,
+          },
+        ],
+      )
+      return
+    }
+
     setCompleting(true)
     try {
       const result = await completeTransit(id)
-      const missingVehicle = isUnsetVehicle(result.transitNumber)
       const missingPhoto = !transit.truckPhotoUrl && !result.truckPhotoUrl
-      const laterHint =
-        missingVehicle || missingPhoto
-          ? '\n\nYou can tap Edit within 6 hours to add vehicle number, photo, or scan more parts.'
-          : '\n\nYou can tap Edit within 6 hours to make changes or scan more parts.'
+      const laterHint = missingPhoto
+        ? '\n\nYou can tap Edit within 6 hours to add a vehicle photo or scan more parts.'
+        : '\n\nYou can tap Edit within 6 hours to make changes or scan more parts.'
       Alert.alert(
         '✓ DISPATCH COMPLETED',
         `${result.productsLoaded} parts loaded and shipped successfully.${laterHint}`,
@@ -439,6 +472,23 @@ export default function TransitScreen() {
       setEditMode(false)
       await refresh()
     } catch (e) {
+      if (
+        e instanceof ApiClientError &&
+        e.code === 'VEHICLE_NUMBER_REQUIRED'
+      ) {
+        Alert.alert(
+          'Vehicle Number Required',
+          e.message,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Add Vehicle No',
+              onPress: openEditVehicleModal,
+            },
+          ],
+        )
+        return
+      }
       Alert.alert(
         'Cannot Complete',
         e instanceof ApiClientError ? e.message : 'Unable to complete dispatch',
@@ -516,6 +566,74 @@ export default function TransitScreen() {
     setPendingQr(null)
   }
 
+  const footerContent = isActive ? (
+    <>
+      <TouchableOpacity
+        style={styles.scanButton}
+        onPress={() => setScannerOpen(true)}
+      >
+        <QrCode size={22} color="#fff" />
+        <Text style={styles.scanButtonText}>
+          {productCount > 0 ? 'SCAN NEXT PART' : 'SCAN QR CODE'}
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[
+          styles.completeButton,
+          (productCount < 1 || completing || deleting) && styles.completeDisabled,
+        ]}
+        disabled={productCount < 1 || completing || deleting}
+        onPress={handleCompletePress}
+      >
+        {completing ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.completeButtonText}>COMPLETE DISPATCH</Text>
+        )}
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.deleteButton, deleting && styles.completeDisabled]}
+        disabled={deleting || completing}
+        onPress={handleDelete}
+      >
+        {deleting ? (
+          <ActivityIndicator color="#DC2626" />
+        ) : (
+          <>
+            <Trash2 size={16} color="#DC2626" />
+            <Text style={styles.deleteButtonText}>DELETE DISPATCH</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </>
+  ) : canOfferEdit && !isEditing ? (
+    <>
+      <TouchableOpacity style={styles.editDispatchButton} onPress={enterEditMode}>
+        <Edit3 size={20} color="#FFFFFF" />
+        <Text style={styles.editDispatchButtonText}>EDIT DISPATCH</Text>
+      </TouchableOpacity>
+      <Text style={styles.completedEditHint}>
+        Available for 6 hours after completion
+        {editWindowLabel ? ` — ${editWindowLabel}` : ''}.
+      </Text>
+    </>
+  ) : canOfferEdit && isEditing ? (
+    <>
+      <TouchableOpacity
+        style={styles.scanButton}
+        onPress={() => setScannerOpen(true)}
+      >
+        <QrCode size={22} color="#fff" />
+        <Text style={styles.scanButtonText}>
+          {productCount > 0 ? 'SCAN NEXT PART' : 'SCAN QR CODE'}
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.doneEditingButton} onPress={exitEditMode}>
+        <Text style={styles.doneEditingButtonText}>DONE EDITING</Text>
+      </TouchableOpacity>
+    </>
+  ) : null
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
@@ -568,7 +686,7 @@ export default function TransitScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          (canScan || canOfferEdit) && styles.contentWithFooter,
+          { paddingBottom: (footerContent ? footerHeight : insets.bottom) + 24 },
         ]}
       >
         {canOfferEdit && !isEditing ? (
@@ -785,71 +903,12 @@ export default function TransitScreen() {
         )}
       </ScrollView>
 
-      {isActive ? (
-        <View style={styles.footer}>
-          <TouchableOpacity
-            style={styles.scanButton}
-            onPress={() => setScannerOpen(true)}
-          >
-            <QrCode size={22} color="#fff" />
-            <Text style={styles.scanButtonText}>
-              {productCount > 0 ? 'SCAN NEXT PART' : 'SCAN QR CODE'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.completeButton,
-              (productCount < 1 || completing || deleting) && styles.completeDisabled,
-            ]}
-            disabled={productCount < 1 || completing || deleting}
-            onPress={handleCompletePress}
-          >
-            {completing ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.completeButtonText}>COMPLETE DISPATCH</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.deleteButton, deleting && styles.completeDisabled]}
-            disabled={deleting || completing}
-            onPress={handleDelete}
-          >
-            {deleting ? (
-              <ActivityIndicator color="#DC2626" />
-            ) : (
-              <>
-                <Trash2 size={16} color="#DC2626" />
-                <Text style={styles.deleteButtonText}>DELETE DISPATCH</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      ) : canOfferEdit && !isEditing ? (
-        <View style={styles.footer}>
-          <TouchableOpacity style={styles.editDispatchButton} onPress={enterEditMode}>
-            <Edit3 size={20} color="#FFFFFF" />
-            <Text style={styles.editDispatchButtonText}>EDIT DISPATCH</Text>
-          </TouchableOpacity>
-          <Text style={styles.completedEditHint}>
-            Available for 6 hours after completion
-            {editWindowLabel ? ` — ${editWindowLabel}` : ''}.
-          </Text>
-        </View>
-      ) : canOfferEdit && isEditing ? (
-        <View style={styles.footer}>
-          <TouchableOpacity
-            style={styles.scanButton}
-            onPress={() => setScannerOpen(true)}
-          >
-            <QrCode size={22} color="#fff" />
-            <Text style={styles.scanButtonText}>
-              {productCount > 0 ? 'SCAN NEXT PART' : 'SCAN QR CODE'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.doneEditingButton} onPress={exitEditMode}>
-            <Text style={styles.doneEditingButtonText}>DONE EDITING</Text>
-          </TouchableOpacity>
+      {footerContent ? (
+        <View
+          style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}
+          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        >
+          {footerContent}
         </View>
       ) : null}
 
@@ -878,7 +937,7 @@ export default function TransitScreen() {
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>VEHICLE NO / PLATE # (OPTIONAL)</Text>
+              <Text style={styles.inputLabel}>VEHICLE NO / PLATE # (REQUIRED TO COMPLETE)</Text>
               <TextInput
                 style={styles.input}
                 value={editVehicleInput}
@@ -990,8 +1049,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  content: { padding: 16, paddingBottom: 40 },
-  contentWithFooter: { paddingBottom: 220 },
+  content: { padding: 16 },
   editWindowBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1369,7 +1427,8 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 16,
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',

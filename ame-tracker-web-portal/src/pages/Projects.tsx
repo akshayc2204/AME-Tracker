@@ -13,7 +13,7 @@ import { isStatusChangeLocked, statusLockMessage } from '../utils/statusLock';
 
 const ITEM_SCHEDULE_HEADERS = [
   'Item',
-  'PieceNbr',
+  'ItemID',
   'Metal',
   'Liner and Insulation',
   'Qty',
@@ -83,6 +83,10 @@ function scheduleLookup(
   header: string,
 ): string | number | boolean | null | undefined {
   if (!values) return undefined;
+  if (header === 'ItemID') {
+    const id = values.ItemID ?? values.ItemId ?? values.itemId;
+    return id != null && String(id).trim() !== '' ? id : null;
+  }
   if (header === 'PieceNbr') {
     const piece = values.PieceNbr ?? values['#'];
     const alpha = values['Alpha number'] ?? values['Alpha #'];
@@ -312,9 +316,10 @@ export default function Projects() {
 
   // Level 3 (Parts) state
   const [search, setSearch] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
   const [itemFilter, setItemFilter] = useState('');
   const [tableView, setTableView] = useState<TableView>('schedule');
-  const [sortKey, setSortKey] = useState<ScheduleSortKey>('PieceNbr');
+  const [sortKey, setSortKey] = useState<ScheduleSortKey>('ItemID');
   const [trackingSortKey, setTrackingSortKey] = useState<TrackingSortKey>('ItemTracking');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedPart, setSelectedPart] = useState<Part | null>(null);
@@ -330,6 +335,17 @@ export default function Projects() {
 
   const [archivingJobId, setArchivingJobId] = useState<string | null>(null);
   const [statusUpdatingKey, setStatusUpdatingKey] = useState<string | null>(null);
+
+  const filteredProjects = useMemo(() => {
+    const q = projectSearch.trim().toLowerCase();
+    if (!q) return allProjects;
+    return allProjects.filter((proj) => {
+      const name = String(proj.name || '').toLowerCase();
+      const code = String(proj.code || '').toLowerCase();
+      const status = String(proj.status || '').toLowerCase();
+      return name.includes(q) || code.includes(q) || status.includes(q);
+    });
+  }, [allProjects, projectSearch]);
 
   const selectedJobSourceId = selectedJob ? String(selectedJob.sourceJobId || selectedJob.id) : null;
 
@@ -359,7 +375,7 @@ export default function Projects() {
             weight: typeof values.Weight === 'number' ? values.Weight : undefined,
             status: (item.status || 'PENDING') as TrackingStatus,
             trackingDateTime: item.trackingDateTime || null,
-            schedule: values,
+            schedule: { ...values, ItemID: item.sourceItemId },
             trackingRecords: (item.trackingRecords || []).map((tr) => ({
               id: tr.id,
               partId: tr.partId,
@@ -528,7 +544,7 @@ export default function Projects() {
     }
     setSearch('');
     setItemFilter('');
-    setSortKey('PieceNbr');
+    setSortKey('ItemID');
     setTrackingSortKey('ItemTracking');
     setSortDir('asc');
     setTableView('schedule');
@@ -564,7 +580,7 @@ export default function Projects() {
     }
     setSearch('');
     setItemFilter('');
-    setSortKey('PieceNbr');
+    setSortKey('ItemID');
     setTrackingSortKey('ItemTracking');
     setSortDir('asc');
     setTableView('schedule');
@@ -667,7 +683,7 @@ export default function Projects() {
           </div>
 
           {/* KPI row */}
-          <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginTop: 18, width: '100%', maxWidth: '100%' }}>
+          <div className="kpi-grid kpi-grid-4" style={{ marginTop: 18 }}>
             {[
               { icon: <Package size={16} />, label: 'Total Parts', value: totalQty, color: 'var(--slate-700)', bg: 'var(--slate-100)' },
               { icon: <CheckCircle size={16} />, label: 'Shipped', value: shipped, color: 'var(--green-600)', bg: 'var(--green-50)' },
@@ -789,7 +805,7 @@ export default function Projects() {
                         <td
                           key={header}
                           className={[
-                            header === 'PieceNbr' || header === 'Alpha number' ? 'td-mono' : '',
+                            header === 'ItemID' || header === 'Alpha number' ? 'td-mono' : '',
                             header === DATETIME_HEADER ? datetimeCellClass(part.status || 'PENDING') : '',
                             header === 'Status' ? statusCellClass(part.status || 'PENDING') : '',
                           ].filter(Boolean).join(' ') || undefined}
@@ -1046,11 +1062,20 @@ export default function Projects() {
           <h2>Projects</h2>
           <p>Open a project to view jobs and parts</p>
         </div>
-        {/* Import page disabled — jobs come from DataUploads folder sync
-        <button className="btn btn-primary" onClick={() => navigate('/import')}>
-          + Import Data
-        </button>
-        */}
+        <div className="topbar-search" style={{ flex: 'none' }}>
+          <Search size={13} />
+          <input
+            value={projectSearch}
+            onChange={(e) => setProjectSearch(e.target.value)}
+            placeholder="Search projects…"
+            style={{ width: 220 }}
+          />
+          {projectSearch ? (
+            <button type="button" onClick={() => setProjectSearch('')} aria-label="Clear project search">
+              <X size={13} />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="card">
@@ -1068,7 +1093,16 @@ export default function Projects() {
               </tr>
             </thead>
             <tbody>
-              {allProjects.map(proj => {
+              {filteredProjects.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '28px 16px', color: 'var(--text-muted)' }}>
+                    {projectSearch.trim()
+                      ? `No projects match “${projectSearch.trim()}”`
+                      : 'No projects found'}
+                  </td>
+                </tr>
+              ) : null}
+              {filteredProjects.map(proj => {
                 const jobs = allJobs.filter(j => j.projectId === proj.id);
                 const shipped = jobs.reduce((s: number, j: any) => s + (j.shippedParts || 0), 0);
                 const total = jobs.reduce((s: number, j: any) => s + (j.totalParts || 0), 0);

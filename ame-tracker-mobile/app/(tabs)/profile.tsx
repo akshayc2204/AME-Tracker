@@ -4,14 +4,18 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  ScrollView,
   StatusBar,
   Alert,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { tabBarScrollInset } from '@/constants/layout'
 import { useAuth } from '@/context/AuthContext'
-import { API_BASE_URL } from '@/services/api'
+import { getApiBaseUrl } from '@/services/api'
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth()
+  const insets = useSafeAreaInsets()
 
   const handleLogout = () => {
     Alert.alert('Sign out', 'Do you want to sign out?', [
@@ -32,20 +36,25 @@ export default function ProfileScreen() {
         <Text style={styles.subtitle}>Operator account</Text>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.label}>Name</Text>
-        <Text style={styles.value}>{user?.fullName || '—'}</Text>
-        <Text style={styles.label}>Email</Text>
-        <Text style={styles.value}>{user?.email || '—'}</Text>
-        <Text style={styles.label}>Role</Text>
-        <Text style={styles.value}>{user?.role || '—'}</Text>
-        <Text style={styles.label}>API</Text>
-        <Text style={styles.valueSmall}>{API_BASE_URL}</Text>
-      </View>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: tabBarScrollInset(insets.bottom) }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.card}>
+          <Text style={styles.label}>Name</Text>
+          <Text style={styles.value}>{user?.fullName || '—'}</Text>
+          <Text style={styles.label}>Email</Text>
+          <Text style={styles.value}>{user?.email || '—'}</Text>
+          <Text style={styles.label}>Role</Text>
+          <Text style={styles.value}>{user?.role || '—'}</Text>
+          <Text style={styles.label}>API</Text>
+          <Text style={styles.valueSmall}>{getApiBaseUrl()}</Text>
+        </View>
 
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Sign Out</Text>
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <Text style={styles.logoutText}>Sign Out</Text>
+        </TouchableOpacity>
+      </ScrollView>
     </View>
   )
 }

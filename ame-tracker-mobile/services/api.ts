@@ -1,5 +1,6 @@
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { ApiResponse } from '@/types/api'
 import {
   clearSession,
@@ -8,36 +9,189 @@ import {
   setAccessToken,
 } from '@/services/auth-storage'
 
-function resolveApiBaseUrl(): string {
-  // 1. Try to dynamically get the host IP that Expo Go used to load the app bundle from your laptop
+const API_PORT = 3000
+const CACHE_KEY = 'ame.api.baseUrl'
+const REQUEST_TIMEOUT_MS = 12_000
+const PROBE_TIMEOUT_MS = 2_500
+
+let activeBaseUrl: string | null = null
+let resolvePromise: Promise<string> | null = null
+
+function normalizeBaseUrl(url: string): string {
+  return url.trim().replace(/\/$/, '')
+}
+
+function metroDevHost(): string {
   const hostUri =
     Constants.expoConfig?.hostUri ||
     (Constants as any).expoGoConfig?.debuggerHost ||
     (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
     (Constants as any).manifest?.debuggerHost ||
-    (Constants as any).experienceUrl ||
     ''
-
-  const host = hostUri ? hostUri.split(':')[0] : ''
-  if (host && host !== 'localhost' && host !== '127.0.0.1') {
-    return `http://${host}:3000`
-  }
-
-  // 2. Fall back to environment variable if configured
-  const fromEnv = process.env.EXPO_PUBLIC_API_URL?.trim()
-  if (fromEnv && !fromEnv.includes('localhost') && !fromEnv.includes('127.0.0.1')) {
-    return fromEnv.replace(/\/$/, '')
-  }
-
-  // 3. Android emulator fallback
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:3000'
-  }
-
-  return (fromEnv || 'http://localhost:3000').replace(/\/$/, '')
+  const host = hostUri ? String(hostUri).split(':')[0].trim() : ''
+  if (!host || host === 'localhost' || host === '127.0.0.1') return ''
+  return host
 }
 
-export const API_BASE_URL = resolveApiBaseUrl()
+function metroDevPort(): string {
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    (Constants as any).expoGoConfig?.debuggerHost ||
+    (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
+    (Constants as any).manifest?.debuggerHost ||
+    ''
+  const parts = hostUri ? String(hostUri).split(':') : []
+  return parts[1]?.trim() || '8081'
+}
+
+/** Prefer Metro proxy (same host Expo already uses), then direct API ports. */
+function buildCandidateBaseUrls(): string[] {
+  const candidates: string[] = []
+  const push = (url?: string | null) => {
+    if (!url) return
+    const normalized = normalizeBaseUrl(url)
+    if (!normalized) return
+    if (!candidates.includes(normalized)) candidates.push(normalized)
+  }
+
+  const fromEnv = process.env.EXPO_PUBLIC_API_URL
+    ? normalizeBaseUrl(process.env.EXPO_PUBLIC_API_URL)
+    : ''
+
+  // Explicit non-loopback env wins first (production / known LAN).
+  if (
+    fromEnv &&
+    !fromEnv.includes('127.0.0.1') &&
+    !fromEnv.includes('localhost')
+  ) {
+    push(fromEnv)
+  }
+
+  const lanHost = metroDevHost()
+  const metroPort = metroDevPort()
+
+  // Highest reliability in Expo Go: API proxied through Metro (:8081).
+  // Phone can already load JS from this host; Windows often blocks :3000.
+  if (lanHost) {
+    push(`http://${lanHost}:${metroPort}`)
+  }
+  if (Platform.OS === 'android' && __DEV__) {
+    push(`http://127.0.0.1:${metroPort}`)
+    push(`http://localhost:${metroPort}`)
+  }
+
+  // USB debugging via `adb reverse tcp:3000 tcp:3000`
+  if (Platform.OS === 'android') {
+    push(`http://127.0.0.1:${API_PORT}`)
+  }
+
+  if (lanHost) {
+    push(`http://${lanHost}:${API_PORT}`)
+  }
+
+  if (fromEnv) {
+    push(fromEnv)
+  }
+
+  // Android emulator → host machine
+  if (Platform.OS === 'android') {
+    push(`http://10.0.2.2:${API_PORT}`)
+    push(`http://10.0.2.2:${metroPort}`)
+  }
+
+  push(`http://localhost:${API_PORT}`)
+  push(`http://127.0.0.1:${API_PORT}`)
+
+  return candidates
+}
+
+async function probeBaseUrl(baseUrl: string): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
+  try {
+    const response = await fetch(`${baseUrl}/api/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+    // Any HTTP response means the API host is reachable.
+    return response.status > 0
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function discoverWorkingBaseUrl(prefer?: string | null): Promise<string> {
+  // Never prefer a direct :3000 cache when Metro proxy candidates exist —
+  // phone often cannot open Windows port 3000 even though :8081 works.
+  const preferred =
+    prefer && /:(8081|19000|19001)\b/.test(prefer) ? prefer : null
+
+  const ordered = [
+    ...(preferred ? [normalizeBaseUrl(preferred)] : []),
+    ...buildCandidateBaseUrls(),
+  ].filter((url, index, all) => url && all.indexOf(url) === index)
+
+  if (__DEV__) {
+    console.log('[api] probing candidates =', ordered)
+  }
+
+  // Probe in parallel; pick the first success in preferred order.
+  const probes = ordered.map(async (url) => {
+    const ok = await probeBaseUrl(url)
+    return ok ? url : null
+  })
+  const results = await Promise.all(probes)
+  const winner = results.find((url): url is string => !!url)
+
+  if (!winner) {
+    throw new ApiClientError(
+      `Unable to reach the API. Tried: ${ordered.join(', ')}. Is the backend running on port ${API_PORT}?`,
+      'NETWORK_ERROR',
+      0,
+    )
+  }
+
+  return winner
+}
+
+export async function ensureApiBaseUrl(force = false): Promise<string> {
+  if (!force && activeBaseUrl) return activeBaseUrl
+
+  if (!resolvePromise || force) {
+    resolvePromise = (async () => {
+      let cached: string | null = null
+      try {
+        cached = await AsyncStorage.getItem(CACHE_KEY)
+      } catch {
+        cached = null
+      }
+
+      const winner = await discoverWorkingBaseUrl(force ? null : cached)
+      activeBaseUrl = winner
+      try {
+        await AsyncStorage.setItem(CACHE_KEY, winner)
+      } catch {
+        // ignore cache write failures
+      }
+      if (__DEV__) {
+        console.log('[api] using API_BASE_URL =', winner)
+      }
+      return winner
+    })().finally(() => {
+      resolvePromise = null
+    })
+  }
+
+  return resolvePromise
+}
+
+/** Sync accessor for media URLs / UI. Prefer ensureApiBaseUrl() before first request. */
+export function getApiBaseUrl(): string {
+  return activeBaseUrl || buildCandidateBaseUrls()[0] || `http://127.0.0.1:${API_PORT}`
+}
 
 export class ApiClientError extends Error {
   code: string
@@ -49,8 +203,6 @@ export class ApiClientError extends Error {
     this.status = status
   }
 }
-
-const REQUEST_TIMEOUT_MS = 8000
 
 async function fetchWithTimeout(
   url: string,
@@ -72,6 +224,10 @@ async function fetchWithTimeout(
 }
 
 function humanizeNetworkError(): string {
+  const base = getApiBaseUrl()
+  if (__DEV__) {
+    return `Unable to connect to ${base}. Backend may be down, or USB reverse dropped — reconnect phone and reload.`
+  }
   return 'Unable to connect to server. Please check your network connection and try again.'
 }
 
@@ -95,7 +251,8 @@ async function refreshAccessToken(): Promise<string | null> {
       const refreshToken = await getRefreshToken()
       if (!refreshToken) return null
       try {
-        const response = await fetchWithTimeout(`${API_BASE_URL}/api/auth/refresh`, {
+        const base = await ensureApiBaseUrl()
+        const response = await fetchWithTimeout(`${base}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken }),
@@ -116,11 +273,18 @@ async function refreshAccessToken(): Promise<string | null> {
   return refreshPromise
 }
 
+function isNetworkFailure(err: unknown): boolean {
+  return (
+    err instanceof ApiClientError &&
+    (err.code === 'NETWORK_ERROR' || err.code === 'NETWORK_TIMEOUT')
+  )
+}
+
 export async function apiRequest<T>(
   path: string,
-  options: RequestInit & { auth?: boolean; retry?: boolean } = {},
+  options: RequestInit & { auth?: boolean; retry?: boolean; _retriedHost?: boolean } = {},
 ): Promise<T> {
-  const { auth = true, retry = true, headers, ...rest } = options
+  const { auth = true, retry = true, headers, _retriedHost, ...rest } = options
   const finalHeaders: Record<string, string> = {
     Accept: 'application/json',
     ...(headers as Record<string, string>),
@@ -136,13 +300,26 @@ export async function apiRequest<T>(
     if (token) finalHeaders.Authorization = `Bearer ${token}`
   }
 
+  const base = await ensureApiBaseUrl()
+
   let response: Response
   try {
-    response = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
+    response = await fetchWithTimeout(`${base}${path}`, {
       ...rest,
       headers: finalHeaders,
     })
   } catch (err) {
+    // Host may have changed (USB reverse dropped / Wi-Fi IP changed) — rediscover once.
+    if (!_retriedHost && isNetworkFailure(err)) {
+      activeBaseUrl = null
+      try {
+        await AsyncStorage.removeItem(CACHE_KEY)
+      } catch {
+        // ignore
+      }
+      await ensureApiBaseUrl(true)
+      return apiRequest<T>(path, { ...options, _retriedHost: true })
+    }
     if (err instanceof ApiClientError) throw err
     throw new ApiClientError(humanizeNetworkError(), 'NETWORK_ERROR', 0)
   }

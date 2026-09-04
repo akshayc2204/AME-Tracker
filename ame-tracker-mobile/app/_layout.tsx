@@ -24,7 +24,7 @@ function AuthGuard() {
     const inAuthGroup = segments[0] === '(tabs)'
     const onLogin = segments[0] === 'login'
 
-    if (isAuthenticated && (onLogin || segments[0] === undefined || segments[0] === 'index')) {
+    if (isAuthenticated && (onLogin || segments[0] === undefined)) {
       // Logged in but on login/index → go to tabs
       router.replace('/(tabs)')
     } else if (!isAuthenticated && !onLogin) {

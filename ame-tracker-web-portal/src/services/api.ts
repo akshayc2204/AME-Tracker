@@ -259,6 +259,68 @@ export const api = {
     ).data;
   },
 
+  async listUsers() {
+    return (
+      await request<
+        Array<{
+          id: number;
+          email: string;
+          fullName: string;
+          name?: string;
+          role: string;
+          isActive: number;
+          createdAt?: string;
+        }>
+      >('/users')
+    ).data;
+  },
+
+  async createUser(input: {
+    email: string;
+    password: string;
+    fullName?: string;
+    role?: string;
+  }) {
+    return (
+      await request<{
+        id: number;
+        email: string;
+        fullName: string;
+        role: string;
+        isActive: number;
+        createdAt?: string;
+      }>('/users', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+    ).data;
+  },
+
+  async updateUser(
+    id: number,
+    input: {
+      fullName?: string;
+      email?: string;
+      newPassword?: string;
+      role?: string;
+      isActive?: number;
+    },
+  ) {
+    return (
+      await request<{
+        id: number;
+        email: string;
+        fullName: string;
+        role: string;
+        isActive: number;
+        createdAt?: string;
+      }>(`/users/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      })
+    ).data;
+  },
+
   async logout() {
     const rToken = getRefreshToken();
     try {

@@ -763,7 +763,7 @@ export default function Reports() {
   }
 
   return (
-    <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+    <div style={{ maxWidth: 1400, margin: '0 auto', width: '100%', minWidth: 0 }}>
       {/* ─── Header Row ─── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div>
@@ -775,7 +775,7 @@ export default function Reports() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             onClick={() => openGaugePreview()}
             style={{
