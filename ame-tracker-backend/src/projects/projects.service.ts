@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common'
+import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 
 @Injectable()
@@ -43,7 +43,9 @@ export class ProjectsService {
       },
     })
 
-    if (!project) return null
+    // Bug 12 fix: return 404 instead of null so the HTTP layer doesn't send
+    // an empty 200 body that silently confuses the portal's data fetching.
+    if (!project) throw new NotFoundException(`Project ${id} not found`)
 
     return this.mapProject(project)
   }

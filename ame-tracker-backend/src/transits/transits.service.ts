@@ -91,7 +91,18 @@ export class TransitsService {
     const page = params.page ?? 1
     const pageSize = Math.min(params.pageSize ?? 50, 100)
 
+    // Build a shared where clause so count() and findMany() always agree.
+    const where: Record<string, unknown> = {}
+    if (params.status) {
+      // Normalise the portal's 'ACTIVE' alias to the DB value 'OPEN'.
+      where.status = params.status === 'ACTIVE' ? 'OPEN' : params.status
+    }
+    if (params.search?.trim()) {
+      where.vehicleNumber = { contains: params.search.trim() }
+    }
+
     const dispatches = await this.prisma.dispatch.findMany({
+      where,
       skip: (page - 1) * pageSize,
       take: pageSize,
       orderBy: { startedAt: 'desc' },
@@ -117,7 +128,8 @@ export class TransitsService {
       },
     })
 
-    const total = await this.prisma.dispatch.count()
+    // Bug 2 fix: use the same where clause for count so pagination totals are correct.
+    const total = await this.prisma.dispatch.count({ where })
 
     const items = dispatches.map((d) => {
       const projectsSet = new Set<string>()
@@ -224,6 +236,10 @@ export class TransitsService {
         ? new Date(dispatch.completedAt.getTime() + POST_COMPLETE_EDIT_MS).toISOString()
         : null
 
+    // Bug 8 fix: derive clients count from the grouped tree instead of hardcoding 0.
+    const grouped = this.groupProducts(transitProducts)
+    const clientsCount = grouped.length
+
     return {
       id: dispatch.id,
       vehicleNumber: transitNumber,
@@ -240,11 +256,11 @@ export class TransitsService {
       transitProducts,
       summary: {
         products: transitProducts.length,
-        clients: 0,
+        clients: clientsCount,
         projects: projects.size,
         jobs: jobs.size,
       },
-      grouped: this.groupProducts(transitProducts),
+      grouped,
     }
   }
 
@@ -594,8 +610,10 @@ export class TransitsService {
 
     await this.prisma.$transaction(async (tx) => {
       if (unitIds.length) {
+        // Bug 4 fix: only reset units that are actually SHIPPED back to PENDING.
+        // Units that were stale-released (status != SHIPPED) must not be touched.
         await tx.itemUnit.updateMany({
-          where: { id: { in: unitIds } },
+          where: { id: { in: unitIds }, currentStatus: 'SHIPPED' },
           data: { currentStatus: 'PENDING' },
         })
       }
@@ -679,8 +697,25 @@ export class TransitsService {
         select: { itemUnitId: true },
       })
 
-      await tx.trackingEvent.createMany({
-        data: loadedUnits.map((dp) => ({
+      // Bug 9 fix: avoid duplicate SHIP events if a late scan (within the 6-hour
+      // edit window) already wrote a SHIP event for this unit on this dispatch.
+      // SQLite doesn't support skipDuplicates, so we pre-filter instead.
+      const existingShipUnitIds = new Set(
+        (
+          await tx.trackingEvent.findMany({
+            where: {
+              dispatchId: dispatch.id,
+              eventType: 'SHIP',
+              itemUnitId: { in: loadedUnits.map((dp) => dp.itemUnitId) },
+            },
+            select: { itemUnitId: true },
+          })
+        ).map((e) => e.itemUnitId),
+      )
+
+      const newShipEvents = loadedUnits
+        .filter((dp) => !existingShipUnitIds.has(dp.itemUnitId))
+        .map((dp) => ({
           itemUnitId: dp.itemUnitId,
           eventType: 'SHIP',
           status: 'SHIPPED',
@@ -688,8 +723,11 @@ export class TransitsService {
           userId: Number(user.id),
           dispatchId: dispatch.id,
           vehicleNumber: dispatch.vehicleNumber,
-        })),
-      })
+        }))
+
+      if (newShipEvents.length > 0) {
+        await tx.trackingEvent.createMany({ data: newShipEvents })
+      }
 
       return updated
     })
@@ -720,13 +758,11 @@ export class TransitsService {
   }
 
   private async findUnitByQr(qrValue: string) {
+    // Bug 1 fix: removed redundant OR clause — { qrCode: { equals: qrValue } } is
+    // identical to { qrCode: qrValue } and never matches anything the first clause
+    // would not. parseQrPayload already lowercases the value to match stored codes.
     return this.prisma.itemUnit.findFirst({
-      where: {
-        OR: [
-          { qrCode: qrValue },
-          { qrCode: { equals: qrValue } },
-        ],
-      },
+      where: { qrCode: qrValue },
       include: {
         item: true,
         job: { include: { project: true } },

@@ -12,8 +12,6 @@ import Projects from './pages/Projects';
 import Dispatch from './pages/Dispatch';
 import Reports from './pages/Reports';
 import Admin from './pages/Admin';
-// Import page disabled — jobs come from DataUploads folder sync
-// import Import from './pages/Import';
 
 // Layout
 import Sidebar from './components/layout/Sidebar';
@@ -62,10 +60,7 @@ export default function App() {
           <Route path="/dispatch" element={<AppLayout title="Dispatch"><Dispatch /></AppLayout>} />
           <Route path="/reports" element={<AppLayout title="Reports"><Reports /></AppLayout>} />
           <Route path="/admin" element={<AppLayout title="Admin"><Admin /></AppLayout>} />
-          {/* Import page disabled — jobs come from DataUploads folder sync
-          <Route path="/import" element={<AppLayout title="Import Master Data" subtitle="Upload Vulcan source files"><Import /></AppLayout>} />
-          */}
-          <Route path="/import" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/import" element={<Navigate to="/admin" replace />} />
           <Route path="/settings" element={<Navigate to="/admin" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

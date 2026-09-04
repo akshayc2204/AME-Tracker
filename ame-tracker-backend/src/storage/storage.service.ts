@@ -13,7 +13,7 @@ export class StorageService {
   }
 
   async saveLocal(
-    folder: 'truck-photos' | 'imports',
+    folder: 'truck-photos',
     originalName: string,
     buffer: Buffer,
   ): Promise<string> {

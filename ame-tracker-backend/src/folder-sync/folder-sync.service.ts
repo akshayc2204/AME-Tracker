@@ -15,7 +15,11 @@ import { AuditService } from '../audit/audit.service'
 import { ImportsService } from '../imports/imports.service'
 import type { AuthUser } from '../common/decorators/current-user.decorator'
 
-const DEFAULT_FOLDER = '/Users/mangeshkharat/DataUploads'
+// Bug 7 fix: empty string means folder sync is effectively disabled until the
+// admin configures DATA_UPLOADS_PATH in .env or sets the path via the Admin UI.
+// The original '/Users/mangeshkharat/DataUploads' was a developer-machine path
+// that crashes with ENOENT on any other server.
+const DEFAULT_FOLDER = ''
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000
 const SETTING_FOLDER_PATH = 'folder_sync_path'
 const SETTING_INTERVAL_MS = 'folder_sync_interval_ms'
@@ -361,6 +365,26 @@ export class FolderSyncService implements OnModuleInit, OnModuleDestroy {
     let incomplete = 0
 
     try {
+      if (!folderPath) {
+        this.logger.warn(
+          'Folder sync skipped: no DATA_UPLOADS_PATH configured. Set the path in the Admin UI or .env.',
+        )
+        const finished: FolderSyncRunResult = {
+          reason,
+          folderPath: '',
+          scannedPairs: 0,
+          imported: 0,
+          skipped: 0,
+          failed: 0,
+          incomplete: 0,
+          startedAt: startedAt.toISOString(),
+          finishedAt: new Date().toISOString(),
+          pairs: [],
+        }
+        this.lastRun = finished
+        return finished
+      }
+
       await mkdir(folderPath, { recursive: true })
       const discovered = await this.discoverPairs(folderPath)
       const user = await this.systemUser()

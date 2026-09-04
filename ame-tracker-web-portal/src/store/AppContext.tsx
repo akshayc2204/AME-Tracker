@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useReducer, useState } from 'react';
 import {
-  PARTS, DISPATCHES, RECENT_EVENTS, DASHBOARD_KPI,
+  DASHBOARD_KPI,
   type Part, type ScanEvent, type Dispatch
 } from '../data/mockData';
 import { api, getAuthToken } from '../services/api';
@@ -62,10 +62,13 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
+// Bug 11 fix: initialize with empty state — all pages fetch live data from the
+// API on mount. The mock data had a different shape (trackingRecords) from the
+// real API response, so SCAN_EVENT reducer mutations were silently doing nothing.
 const initialState: AppState = {
-  parts: PARTS,
-  dispatches: DISPATCHES,
-  recentEvents: RECENT_EVENTS,
+  parts: [],
+  dispatches: [],
+  recentEvents: [],
   kpi: DASHBOARD_KPI,
 };
 

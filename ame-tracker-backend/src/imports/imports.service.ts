@@ -1,20 +1,18 @@
 import { Prisma } from '@prisma/client'
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
-import { StorageService } from '../storage/storage.service'
 import { AuditService } from '../audit/audit.service'
 import {
   findJobBySourceJobId,
   nextJobImportVersion,
 } from '../jobs/job-version.util'
-import { BusinessError } from '../common/errors/business.error'
 import type { AuthUser } from '../common/decorators/current-user.decorator'
 import { parseVjob, type VjobParseResult } from './parsers/vjob.parser'
-import { parseFabshop, type FabshopParseResult } from './parsers/fabshop.parser'
+import type { FabshopParseResult } from './parsers/fabshop.parser'
 import { parseJobReport, type JobReportParseResult } from './parsers/job-report.parser'
 import { combineItemSchedule, type CombinedScheduleRow } from './join-schedule'
 import { readFile } from 'fs/promises'
-import { basename, join } from 'path'
+import { basename } from 'path'
 
 @Injectable()
 export class ImportsService {
@@ -22,150 +20,9 @@ export class ImportsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: StorageService,
     private readonly audit: AuditService,
   ) {}
 
-  async create(
-    user: AuthUser,
-    files: {
-      vjob?: Express.Multer.File
-      fabshop?: Express.Multer.File
-      jobReport?: Express.Multer.File
-      xlsx?: Express.Multer.File
-    },
-  ) {
-    if (!files.vjob && !files.fabshop && !files.jobReport) {
-      throw new BusinessError(
-        'FILES_REQUIRED',
-        'Upload at least one file: .t4vjob, Fab Shop .xlsx, or Job Report .xlsx',
-        400,
-      )
-    }
-
-    const vjobPath = files.vjob
-      ? await this.storage.saveLocal('imports', files.vjob.originalname, files.vjob.buffer)
-      : null
-    const fabshopPath = files.fabshop
-      ? await this.storage.saveLocal(
-          'imports',
-          files.fabshop.originalname,
-          files.fabshop.buffer,
-        )
-      : null
-    const jobReportPath = files.jobReport
-      ? await this.storage.saveLocal(
-          'imports',
-          files.jobReport.originalname,
-          files.jobReport.buffer,
-        )
-      : null
-
-    const batch = await this.prisma.importBatch.create({
-      data: {
-        t4vjobFilename: vjobPath,
-        fabshopFilename: fabshopPath,
-        jobReportFilename: jobReportPath,
-        status: 'VALIDATING',
-        uploadedBy: Number(user.id),
-      },
-    })
-
-    await this.audit.log({
-      userId: Number(user.id),
-      action: 'IMPORT_UPLOADED',
-      entityType: 'ImportBatch',
-      entityId: String(batch.id),
-    })
-
-    return {
-      id: batch.id,
-      status: batch.status,
-      t4vjobFilename: batch.t4vjobFilename,
-      fabshopFilename: batch.fabshopFilename,
-      jobReportFilename: batch.jobReportFilename,
-      originalNames: {
-        vjob: files.vjob?.originalname ?? null,
-        fabshop: files.fabshop?.originalname ?? null,
-        jobReport: files.jobReport?.originalname ?? null,
-      },
-    }
-  }
-
-  async validate(batchId: string | number) {
-    const batch = await this.getBatch(Number(batchId))
-    const root = process.env.STORAGE_LOCAL_PATH || './uploads'
-
-    let vjobResult = null as ReturnType<typeof parseVjob> | null
-    let fabResult = null as Awaited<ReturnType<typeof parseFabshop>> | null
-    const errors: string[] = []
-    const warnings: string[] = []
-
-    if (batch.t4vjobFilename) {
-      try {
-        const text = await readFile(join(root, batch.t4vjobFilename), 'utf8')
-        vjobResult = parseVjob(text)
-        warnings.push(...vjobResult.warnings)
-      } catch (e) {
-        errors.push(e instanceof Error ? e.message : 'Failed to parse VJOB')
-      }
-    }
-
-    if (batch.fabshopFilename) {
-      try {
-        const buf = await readFile(join(root, batch.fabshopFilename))
-        fabResult = await parseFabshop(buf)
-        warnings.push(...fabResult.warnings)
-      } catch (e) {
-        errors.push(e instanceof Error ? e.message : 'Failed to parse fab shop')
-      }
-    }
-
-    const vjobItems = vjobResult?.items ?? []
-    const fabRows = fabResult?.records ?? []
-
-    // Match calculations
-    const vjobPieces = new Set(vjobItems.map((i) => i.pieceNo))
-    let matched = 0
-    let unmatched = 0
-
-    for (const rec of fabRows) {
-      if (vjobPieces.has(rec.pieceNo)) {
-        matched++
-      } else {
-        unmatched++
-      }
-    }
-
-    const preview = {
-      batchId: batch.id,
-      jobCode: vjobResult?.header.jobCode || vjobResult?.header.jobId || '—',
-      jobName: vjobResult?.header.jobName || '—',
-      projectName: vjobResult?.header.projectName || '—',
-      clientName: vjobResult?.header.projectName || '—',
-      productsFound: vjobItems.length,
-      new: vjobItems.length,
-      qrRows: fabRows.length,
-      matchedRows: matched,
-      unmatchedRows: unmatched,
-      sequentialMatches: matched,
-      warnings: warnings.length,
-      warningDetails: warnings,
-      errorDetails: errors,
-    }
-
-    return {
-      id: batch.id,
-      status: errors.length ? 'FAILED' : 'VALIDATED',
-      preview,
-    }
-  }
-
-  async execute(batchId: string | number, user: AuthUser) {
-    const batch = await this.getBatch(Number(batchId))
-    const parsed = await this.parseBatchFiles(batch)
-    return this.commitParsed(batch.id, user, parsed, batch.t4vjobFilename)
-  }
 
   /**
    * Import a paired .t4vjob + Item Schedule .xlsx from disk (folder auto-sync).
@@ -217,38 +74,7 @@ export class ImportsService {
     return parseVjob(text)
   }
 
-  private async parseBatchFiles(batch: {
-    t4vjobFilename: string | null
-    fabshopFilename: string | null
-    jobReportFilename: string | null
-  }) {
-    const root = process.env.STORAGE_LOCAL_PATH || './uploads'
-    const isRemoteUri = (name: string | null) =>
-      Boolean(name?.startsWith('fabshop-sync://') || name?.startsWith('folder-sync://'))
 
-    if (!batch.t4vjobFilename && !batch.fabshopFilename && !batch.jobReportFilename) {
-      throw new BusinessError('NO_FILES', 'Import batch has no files', 400)
-    }
-
-    const vjobResult =
-      batch.t4vjobFilename && !isRemoteUri(batch.t4vjobFilename)
-        ? parseVjob(await readFile(join(root, batch.t4vjobFilename), 'utf8'))
-        : null
-
-    const fabResult = batch.fabshopFilename
-      ? await parseFabshop(await readFile(join(root, batch.fabshopFilename)))
-      : null
-
-    const reportResult = batch.jobReportFilename
-      ? await parseJobReport(await readFile(join(root, batch.jobReportFilename)))
-      : null
-
-    if (!vjobResult && !fabResult && !reportResult) {
-      throw new BusinessError('PARSE_FAILED', 'Unable to parse import files', 400)
-    }
-
-    return { vjobResult, fabResult, reportResult }
-  }
 
   private async commitParsed(
     batchId: number,
@@ -655,16 +481,7 @@ export class ImportsService {
     return batch
   }
 
-  private async getBatch(id: number) {
-    const batch = await this.prisma.importBatch.findUnique({ where: { id } })
-    if (!batch) {
-      throw new NotFoundException({
-        errorCode: 'IMPORT_NOT_FOUND',
-        message: 'Import batch not found',
-      })
-    }
-    return batch
-  }
+
 }
 
 function jobCodeFromStoredPath(path: string | null | undefined): string | null {

@@ -15,8 +15,6 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', icon: <LayoutDashboard size={18} />, to: '/dashboard' },
-  // Import page disabled — jobs come from DataUploads folder sync
-  // { label: 'Import', icon: <Upload size={18} />, to: '/import' },
   { label: 'Projects', icon: <FolderKanban size={18} />, to: '/projects' },
   // Manual Tracking disabled for now
   // { label: 'Manual Tracking', icon: <Barcode size={18} />, to: '/parts/track' },

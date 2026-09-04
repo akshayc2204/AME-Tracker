@@ -102,8 +102,12 @@ export function resolveVehiclePhotoUrl(url?: string | null): string | null {
   if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
     return url;
   }
+  // Bug 10 fix: derive the server origin from the configured API_BASE_URL so
+  // vehicle photos resolve correctly in any deploy environment (not just localhost:3000).
+  // API_BASE_URL is e.g. "http://192.168.1.10:3000/api" \u2014 strip the /api path suffix.
+  const serverOrigin = API_BASE_URL.replace(/\/api\/?$/, '');
   const cleanPath = url.startsWith('/') ? url : `/${url}`;
-  return `http://localhost:3000${cleanPath}`;
+  return `${serverOrigin}${cleanPath}`;
 }
 
 export function resolveTrackEvent(item: any, latestEvent?: any): 'Mobile scan' | 'Portal scan' | null {
@@ -543,71 +547,7 @@ export const api = {
     return res.data;
   },
 
-  // File Ingestion
-  async uploadImport(files: { vjob?: File; fabshop?: File; jobReport?: File }) {
-    const formData = new FormData();
-    if (files.vjob) formData.append('vjob', files.vjob);
-    if (files.fabshop) formData.append('fabshop', files.fabshop);
-    if (files.jobReport) formData.append('jobReport', files.jobReport);
 
-    return (
-      await request<{
-        id: number;
-        status: string;
-        t4vjobFilename?: string;
-        fabshopFilename?: string;
-      }>('/imports', {
-        method: 'POST',
-        body: formData,
-      })
-    ).data;
-  },
-
-  async validateImport(id: number | string) {
-    return (
-      await request<{
-        id: number;
-        status: string;
-        preview: {
-          batchId: number;
-          jobCode: string;
-          jobName: string;
-          projectName: string;
-          productsFound: number;
-          qrRows: number;
-          matchedRows: number;
-          unmatchedRows: number;
-          sequentialMatches: number;
-          warnings: number;
-          warningDetails: string[];
-          errorDetails: string[];
-        };
-      }>(`/imports/${id}/validate`, {
-        method: 'POST',
-      })
-    ).data;
-  },
-
-  async executeImport(id: number | string) {
-    return (
-      await request<{
-        importId: number;
-        summary: {
-          batchId: number;
-          jobCode: string;
-          jobName: string;
-          clientName: string;
-          status: string;
-          productsFound: number;
-          totalFabShopRows: number;
-          matchedRows: number;
-          unmatchedRows: number;
-        };
-      }>(`/imports/${id}/execute`, {
-        method: 'POST',
-      })
-    ).data;
-  },
 
   async getImports(source?: 'upload' | 'sync' | 'folder') {
     const q = source ? `?source=${encodeURIComponent(source)}` : '';

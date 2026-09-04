@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { memoryStorage } from 'multer'
+import { IsString, MinLength } from 'class-validator'
 import { TransitsService } from './transits.service'
 import { ScanDto } from './dto/scan.dto'
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard'
@@ -20,6 +21,13 @@ import { Roles } from '../common/decorators/roles.decorator'
 import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
 import { ok } from '../common/dto/api-response'
 import { BusinessError } from '../common/errors/business.error'
+
+/** Bug 13 fix: typed DTO so ValidationPipe catches missing/null vehicleNumber. */
+class UpdateVehicleDto {
+  @IsString()
+  @MinLength(1)
+  vehicleNumber!: string
+}
 
 @Controller('api/transits')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -127,7 +135,7 @@ export class TransitsController {
   async updateVehicle(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
-    @Body() body: { vehicleNumber: string },
+    @Body() body: UpdateVehicleDto,
   ) {
     return ok(
       await this.transitsService.updateVehicleNumber(id, body.vehicleNumber, user),

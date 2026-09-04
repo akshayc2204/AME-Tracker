@@ -1168,14 +1168,28 @@ export class ReportsService {
       }
     }
 
-    return this.prisma.itemUnit.findMany({
+    // Bug 15 fix: without a take limit, a job with tens of thousands of pieces
+    // loads everything into Node heap at once. Cap at 10,000 rows and log a
+    // warning — callers should add filters (jobCode) for very large datasets.
+    const rows = await this.prisma.itemUnit.findMany({
       where: whereClause,
       include: {
         item: true,
         job: { include: { project: true } },
       },
       orderBy: [{ jobId: 'asc' }, { id: 'asc' }],
+      take: 10_000,
     })
+
+    if (rows.length === 10_000) {
+      // Log but don't throw — let the caller handle the truncated result.
+      console.warn(
+        '[ReportsService] queryUnits hit the 10,000-row safety cap. ' +
+          'Apply a jobCode filter to get complete data for large jobs.',
+      )
+    }
+
+    return rows
   }
 
   async generateJobQrPdf(jobCode: string): Promise<{
@@ -1450,10 +1464,12 @@ export class ReportsService {
         )
     }
 
-    doc.end()
-
-    const pdfBuffer = await new Promise<Buffer>((resolve) => {
+    // Bug 5 fix: register the 'end' listener before calling doc.end() to avoid
+    // a race condition where the event fires before the listener is attached.
+    const pdfBuffer = await new Promise<Buffer>((resolve, reject) => {
       doc.on('end', () => resolve(Buffer.concat(chunks)))
+      doc.on('error', reject)
+      doc.end()
     })
 
     const sanitizedJobName = (job.jobName || `Job-${job.sourceJobId}`)

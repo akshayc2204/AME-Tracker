@@ -57,10 +57,20 @@ export class AuthService {
 
   async refresh(refreshToken: string) {
     try {
-      const payload = await this.jwt.verifyAsync<{ sub: number; email: string; role: string }>(
+      const payload = await this.jwt.verifyAsync<{ sub: number; email: string; role: string; type?: string }>(
         refreshToken,
         { secret: this.config.getOrThrow<string>('JWT_SECRET') },
       )
+
+      // Bug 3 fix: reject access tokens used as refresh tokens. The issueTokens()
+      // method signs refresh tokens with { type: 'refresh' }; access tokens omit it.
+      if (payload.type !== 'refresh') {
+        throw new UnauthorizedException({
+          errorCode: 'INVALID_REFRESH_TOKEN',
+          message: 'Refresh token is invalid or expired',
+        })
+      }
+
       const user = await this.prisma.user.findUnique({
         where: { id: Number(payload.sub) },
       })

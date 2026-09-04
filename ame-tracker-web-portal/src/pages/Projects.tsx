@@ -946,11 +946,6 @@ export default function Projects() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              {/* Import page disabled — jobs come from DataUploads folder sync
-              <button className="btn btn-primary btn-sm" onClick={() => navigate('/import')}>
-                + Import Job
-              </button>
-              */}
               <span className={`badge badge-${selectedProject.status.toLowerCase()}`} style={{ fontSize: 12, padding: '5px 12px' }}>
                 {selectedProject.status}
               </span>
