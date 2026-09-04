@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
   FolderSync, RefreshCw, Save, FolderOpen, CheckCircle, User, Pencil,
-  AlertCircle,
+  AlertCircle, Archive,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { api } from '../services/api';
+import {
+  FOLDER_PATH_HINT,
+  FOLDER_PATH_PLACEHOLDER,
+  isAbsoluteFolderPath,
+} from '../utils/pathUtils';
 
 type FolderPair = {
   pairKey: string;
@@ -123,6 +128,16 @@ export default function Admin() {
   const [syncing, setSyncing] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [folderMsg, setFolderMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [archivedJobs, setArchivedJobs] = useState<Array<{
+    id: number;
+    jobName: string;
+    projectName: string;
+    sourceJobId: string;
+    importVersion: number;
+    totalParts: number;
+    archivedAt: string;
+  }>>([]);
+  const [archivesLoading, setArchivesLoading] = useState(true);
 
   function applyUser(user: { fullName?: string; email?: string }) {
     const name = (user.fullName || '').trim() || fullName.trim();
@@ -138,10 +153,12 @@ export default function Admin() {
 
   async function load() {
     setLoading(true);
+    setArchivesLoading(true);
     try {
-      const [me, status] = await Promise.all([
+      const [me, status, archives] = await Promise.all([
         api.getMe().catch(() => null),
         api.getFolderSyncStatus().catch(() => null),
+        api.getJobArchives().catch(() => []),
       ]);
       if (me) applyUser(me);
       if (status) {
@@ -149,6 +166,7 @@ export default function Admin() {
         setFolderPath(status.folderPath || '');
         setIntervalMinutes(status.intervalMinutes || 5);
       }
+      if (Array.isArray(archives)) setArchivedJobs(archives);
     } catch (err: unknown) {
       setFolderMsg({
         type: 'error',
@@ -156,6 +174,7 @@ export default function Admin() {
       });
     } finally {
       setLoading(false);
+      setArchivesLoading(false);
     }
   }
 
@@ -239,8 +258,8 @@ export default function Admin() {
       setFolderMsg({ type: 'error', text: 'Enter the folder path where job files are dropped.' });
       return;
     }
-    if (!nextPath.startsWith('/')) {
-      setFolderMsg({ type: 'error', text: 'Use a full path, for example /Users/you/DataUploads' });
+    if (!isAbsoluteFolderPath(nextPath)) {
+      setFolderMsg({ type: 'error', text: FOLDER_PATH_HINT });
       return;
     }
     setSavingFolder(true);
@@ -391,6 +410,56 @@ export default function Admin() {
         <div className="card-header">
           <div>
             <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Archive size={16} color="var(--slate-500)" />
+              Archived jobs
+            </div>
+            <div className="card-subtitle">
+              Jobs deleted from Projects. Part details are not kept — only total parts at delete time.
+            </div>
+          </div>
+        </div>
+        <div className="card-body" style={{ paddingTop: 0 }}>
+          {archivesLoading ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</p>
+          ) : archivedJobs.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No archived jobs yet.</p>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Job</th>
+                    <th>Project</th>
+                    <th>Job ID</th>
+                    <th>Upload</th>
+                    <th>Total parts</th>
+                    <th>Deleted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {archivedJobs.map((row) => (
+                    <tr key={row.id}>
+                      <td style={{ fontWeight: 600 }}>{row.jobName}</td>
+                      <td>{row.projectName}</td>
+                      <td className="td-mono">{row.sourceJobId}</td>
+                      <td>v{row.importVersion}</td>
+                      <td style={{ fontWeight: 700 }}>{row.totalParts}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        {formatDateTime(row.archivedAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <FolderSync size={16} color="var(--green-600)" />
               Job folder sync
             </div>
@@ -446,7 +515,7 @@ export default function Admin() {
                   className="form-input"
                   value={folderPath}
                   onChange={(e) => setFolderPath(e.target.value)}
-                  placeholder="/Users/you/DataUploads"
+                  placeholder={FOLDER_PATH_PLACEHOLDER}
                   style={{ paddingLeft: 36, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}
                   disabled={savingFolder}
                   autoComplete="off"

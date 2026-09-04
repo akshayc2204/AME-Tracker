@@ -203,7 +203,8 @@ export class FolderSyncService implements OnModuleInit, OnModuleDestroy {
     if (!isAbsolute(trimmed)) {
       throw new BadRequestException({
         errorCode: 'INVALID_FOLDER_PATH',
-        message: 'Folder path must be an absolute path (for example /Users/you/DataUploads)',
+        message:
+          'Folder path must be an absolute path (e.g. G:\\Data\\ImportData or /Users/you/DataUploads)',
       })
     }
     return resolve(trimmed)

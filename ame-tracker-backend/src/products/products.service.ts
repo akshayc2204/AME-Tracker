@@ -1,12 +1,20 @@
 import { randomUUID } from 'crypto'
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 import { itemToScheduleValues } from '../imports/item-schedule'
 import { unitToTrackingExportValues } from '../imports/tracking-export'
+import { findJobBySourceJobId } from '../jobs/job-version.util'
+import { DashboardGateway } from '../dashboard/dashboard.gateway'
+import { isStatusChangeLocked, statusLockMessage } from './status-lock.util'
+
+const ALLOWED_UNIT_STATUSES = new Set(['PENDING', 'SHIPPED'])
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dashboardGateway: DashboardGateway,
+  ) {}
 
   async list(params: {
     search?: string
@@ -236,7 +244,7 @@ export class ProductsService {
   async ensureMissingQrCodes(jobCode?: string) {
     let jobFilter: { jobId?: number } = {}
     if (jobCode) {
-      const job = await this.prisma.job.findUnique({ where: { sourceJobId: jobCode } })
+      const job = await findJobBySourceJobId(this.prisma, jobCode)
       if (job) jobFilter = { jobId: job.id }
     }
 
@@ -272,7 +280,10 @@ export class ProductsService {
     const where: Record<string, unknown> = {}
     if (jobCode) {
       where.job = {
-        OR: [{ sourceJobId: jobCode }, { id: Number(jobCode) || undefined }],
+        OR: [
+          { sourceJobId: jobCode },
+          { id: Number(jobCode) || undefined },
+        ],
       }
     }
     return this.prisma.itemUnit.findMany({
@@ -296,8 +307,16 @@ export class ProductsService {
     id: string | number,
     status: string,
     userId?: number,
-    options?: { vehicleNumber?: string; reason?: string },
+    options?: { vehicleNumber?: string; reason?: string; source?: string; userName?: string },
   ) {
+    const normalized = String(status || '').trim().toUpperCase()
+    if (!ALLOWED_UNIT_STATUSES.has(normalized)) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_STATUS',
+        message: 'Status must be PENDING or SHIPPED',
+      })
+    }
+
     const unit = await this.prisma.itemUnit.findUnique({
       where: { id: Number(id) },
       include: {
@@ -313,26 +332,136 @@ export class ProductsService {
       })
     }
 
-    await this.prisma.$transaction([
-      this.prisma.itemUnit.update({
+    if (normalized === unit.currentStatus) {
+      return this.getById(unit.id)
+    }
+
+    await this.assertStatusChangeAllowed(unit)
+
+    const source = options?.source || 'Portal scan'
+    const reason =
+      options?.reason ||
+      (normalized === 'SHIPPED'
+        ? 'Marked as shipped from portal'
+        : 'Marked as pending from portal')
+
+    if (
+      normalized === 'SHIPPED' &&
+      this.isPortalStatusSource(source) &&
+      unit.currentStatus !== 'SHIPPED'
+    ) {
+      throw new BadRequestException({
+        errorCode: 'RESCAN_REQUIRED',
+        message:
+          'This part must be scanned on mobile to mark as shipped. Portal can only change shipped parts back to Active.',
+      })
+    }
+
+    const now = new Date()
+    await this.prisma.$transaction(async (tx) => {
+      // A part that is not SHIPPED cannot belong to a dispatch. Releasing on every
+      // PENDING write (not just the SHIPPED -> PENDING edge) also repairs units that
+      // an earlier failed revert left linked to a dispatch.
+      if (normalized === 'PENDING') {
+        await tx.dispatchPart.deleteMany({ where: { itemUnitId: unit.id } })
+      }
+
+      await tx.itemUnit.update({
         where: { id: unit.id },
-        data: { currentStatus: status },
-      }),
-      this.prisma.trackingEvent.create({
+        data: {
+          currentStatus: normalized,
+          trackingDate: normalized === 'SHIPPED' ? now : null,
+          updatedAt: now,
+        },
+      })
+
+      await tx.trackingEvent.create({
         data: {
           itemUnitId: unit.id,
           qrCode: unit.qrCode,
-          eventType: status === 'SHIPPED' ? 'SHIP' : 'UPDATE',
-          status,
-          source: 'Portal scan',
+          eventType: normalized === 'SHIPPED' ? 'SHIP' : 'UPDATE',
+          status: normalized,
+          source,
           userId: userId || null,
-          vehicleNumber: options?.vehicleNumber || 'Portal Direct',
-          reason: options?.reason || 'Marked as shipped from manual tracking portal',
+          vehicleNumber: options?.vehicleNumber || '—',
+          reason,
         },
-      }),
+      })
+    })
+
+    const [shipped, total] = await Promise.all([
+      this.prisma.itemUnit.count({ where: { currentStatus: 'SHIPPED' } }),
+      this.prisma.itemUnit.count(),
     ])
 
+    this.dashboardGateway.emitKpi({
+      shipped,
+      totalProducts: total,
+      pending: total - shipped,
+    })
+
+    this.dashboardGateway.emitScan({
+      partId: unit.id,
+      pieceNo: unit.item.pieceNumber || unit.item.sourceItemId,
+      fitting: unit.item.fitting || 'Standard Duct',
+      itemTracking:
+        unit.sourceItemTrackingId != null ? String(unit.sourceItemTrackingId) : '',
+      itemId: String(unit.item.sourceItemId),
+      projectName: unit.job.project?.projectName || '—',
+      jobName: unit.job.jobName || unit.job.sourceJobId,
+      jobCode: unit.job.sourceJobId,
+      vehicleNumber: options?.vehicleNumber || '—',
+      status: normalized,
+      source,
+      userName: options?.userName || 'Operator',
+      timestamp: now.toISOString(),
+    })
+
     return this.getById(unit.id)
+  }
+
+  /**
+   * Shipped parts cannot change status once 24 hours have passed since the
+   * original scan/ship time (trackingDate, else earliest SCAN/SHIP event).
+   */
+  private async assertStatusChangeAllowed(unit: {
+    id: number
+    currentStatus: string
+    trackingDate: Date | null
+    updatedAt: Date
+  }) {
+    const status = String(unit.currentStatus || '').toUpperCase()
+    if (status !== 'SHIPPED' && status !== 'LOADED') return
+
+    let scannedAt: Date | null = unit.trackingDate
+    if (!scannedAt) {
+      const firstShip = await this.prisma.trackingEvent.findFirst({
+        where: {
+          itemUnitId: unit.id,
+          eventType: { in: ['SCAN', 'SHIP'] },
+          status: 'SHIPPED',
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { createdAt: true },
+      })
+      scannedAt = firstShip?.createdAt ?? unit.updatedAt
+    }
+
+    if (isStatusChangeLocked(scannedAt)) {
+      throw new BadRequestException({
+        errorCode: 'STATUS_LOCKED',
+        message: statusLockMessage(),
+      })
+    }
+  }
+
+  private isPortalStatusSource(source: string): boolean {
+    const normalized = String(source || '').toUpperCase()
+    return (
+      normalized === 'DASHBOARD' ||
+      normalized === 'PROJECTS' ||
+      normalized.includes('PORTAL')
+    )
   }
 
   private mapUnit(unit: {
@@ -356,6 +485,7 @@ export class ProductsService {
     component?: number | null
     backOrdered?: string | null
     currentStatus: string
+    trackingDate?: Date | null
     updatedAt: Date
     item: {
       sourceItemId: number
@@ -425,6 +555,10 @@ export class ProductsService {
       dispatchPart?.dispatch?.completedAt?.toISOString() ||
       (unit.currentStatus === 'SHIPPED' ? unit.updatedAt.toISOString() : null)
 
+    const statusLocked =
+      (unit.currentStatus === 'SHIPPED' || unit.currentStatus === 'LOADED') &&
+      isStatusChangeLocked(unit.trackingDate || shippedAt)
+
     const pieceNo = unit.item.pieceNumber || String(unit.item.sourceItemId)
     // Trimble's IDItemTracking for this exact unit — blank if the job synced
     // before tracking rows were available.
@@ -467,6 +601,7 @@ export class ProductsService {
       status: unit.currentStatus === 'PENDING' ? 'PENDING' : unit.currentStatus,
       currentStatus: unit.currentStatus,
       shippedAt,
+      statusLocked,
       trackEvent,
       scanEvent: trackEvent,
       lastEvent: scanEvent

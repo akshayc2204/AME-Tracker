@@ -7,6 +7,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service'
 import { AuditService } from '../audit/audit.service'
 import { FabshopDbService } from './fabshop-db.service'
+import {
+  findJobBySourceJobId,
+  nextJobImportVersion,
+} from '../jobs/job-version.util'
 import type { AuthUser } from '../common/decorators/current-user.decorator'
 
 function groupBy<T, K>(rows: T[], key: (row: T) => K): Map<K, T[]> {
@@ -461,24 +465,30 @@ export class FabshopSyncService {
       },
     })
 
-    const job = await this.prisma.job.upsert({
-      where: { sourceJobId: String(fabJob.IDJob) },
-      create: {
-        projectId: project.id,
-        sourceJobId: String(fabJob.IDJob),
-        jobName: fabJob.JobName,
-        labelColor: fabJob.LabelColor != null ? String(fabJob.LabelColor) : null,
-        isActive: fabJob.IsActive === false ? 0 : 1,
-        isCompleted: fabJob.IsCompleted ? 1 : 0,
-      },
-      update: {
-        jobName: fabJob.JobName,
-        projectId: project.id,
-        labelColor: fabJob.LabelColor != null ? String(fabJob.LabelColor) : null,
-        isActive: fabJob.IsActive === false ? 0 : 1,
-        isCompleted: fabJob.IsCompleted ? 1 : 0,
-      },
-    })
+    const sourceJobId = String(fabJob.IDJob)
+    const existing = await findJobBySourceJobId(this.prisma, sourceJobId)
+    const job = existing
+      ? await this.prisma.job.update({
+          where: { id: existing.id },
+          data: {
+            jobName: fabJob.JobName,
+            projectId: project.id,
+            labelColor: fabJob.LabelColor != null ? String(fabJob.LabelColor) : null,
+            isActive: fabJob.IsActive === false ? 0 : 1,
+            isCompleted: fabJob.IsCompleted ? 1 : 0,
+          },
+        })
+      : await this.prisma.job.create({
+          data: {
+            projectId: project.id,
+            sourceJobId,
+            jobName: fabJob.JobName,
+            importVersion: await nextJobImportVersion(this.prisma, sourceJobId),
+            labelColor: fabJob.LabelColor != null ? String(fabJob.LabelColor) : null,
+            isActive: fabJob.IsActive === false ? 0 : 1,
+            isCompleted: fabJob.IsCompleted ? 1 : 0,
+          },
+        })
 
     return { project, job }
   }

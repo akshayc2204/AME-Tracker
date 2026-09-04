@@ -3,6 +3,10 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 import { StorageService } from '../storage/storage.service'
 import { AuditService } from '../audit/audit.service'
+import {
+  findJobBySourceJobId,
+  nextJobImportVersion,
+} from '../jobs/job-version.util'
 import { BusinessError } from '../common/errors/business.error'
 import type { AuthUser } from '../common/decorators/current-user.decorator'
 import { parseVjob, type VjobParseResult } from './parsers/vjob.parser'
@@ -191,19 +195,15 @@ export class ImportsService {
   }
 
   async jobAlreadyImported(sourceJobId: string): Promise<boolean> {
-    const job = await this.prisma.job.findUnique({
-      where: { sourceJobId },
-      select: { id: true, _count: { select: { items: true } } },
-    })
-    return Boolean(job && job._count.items > 0)
+    const job = await findJobBySourceJobId(this.prisma, sourceJobId)
+    if (!job) return false
+    const count = await this.prisma.item.count({ where: { jobId: job.id } })
+    return count > 0
   }
 
   /** True when the job is in the DB but Tracking Export columns were never written. */
   async jobMissingTrackingExport(sourceJobId: string): Promise<boolean> {
-    const job = await this.prisma.job.findUnique({
-      where: { sourceJobId },
-      select: { id: true },
-    })
+    const job = await findJobBySourceJobId(this.prisma, sourceJobId)
     if (!job) return false
     const withPieceNbr = await this.prisma.itemUnit.count({
       where: { jobId: job.id, pieceNbr: { not: null } },
@@ -284,13 +284,15 @@ export class ImportsService {
         })
       }
 
-      let job = await tx.job.findUnique({ where: { sourceJobId } })
+      let job = await findJobBySourceJobId(tx, sourceJobId)
       if (!job) {
+        const importVersion = await nextJobImportVersion(tx, sourceJobId)
         job = await tx.job.create({
           data: {
             projectId: project.id,
             sourceJobId,
             jobName,
+            importVersion,
             sourceFile: sourceFileHint,
             labelColor: combined.header.jobColor ?? null,
           },

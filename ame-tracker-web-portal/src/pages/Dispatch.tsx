@@ -108,7 +108,7 @@ function PartStatusChip({ status }: { status: string }) {
       padding: '1px 7px', borderRadius: 4, fontSize: '0.7rem', fontWeight: 700,
     }}>
       <CheckCircle2 size={10} />
-      {shipped ? 'Shipped' : status === 'LOADED' ? 'Loaded' : 'Active'}
+      {shipped ? 'Shipped' : status === 'LOADED' ? 'Loaded' : 'Pending'}
     </span>
   );
 }

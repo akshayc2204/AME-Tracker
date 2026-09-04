@@ -1,11 +1,9 @@
-import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { Controller, Get, Param, Post, Query, Body, UseGuards } from '@nestjs/common'
 import { ProductsService } from './products.service'
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard'
 import { RolesGuard } from '../common/guards/roles.guard'
 import { Roles } from '../common/decorators/roles.decorator'
-// Manual Tracking disabled for now
-// import { Body } from '@nestjs/common'
-// import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
+import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
 import { ok } from '../common/dto/api-response'
 
 @Controller('api/products')
@@ -62,25 +60,27 @@ export class ProductsController {
     return ok(await this.productsService.getById(id))
   }
 
-  // Manual Tracking disabled for now — portal mark-as-shipped
-  // @Post(':id/status')
-  // async updateStatus(
-  //   @Param('id') id: string,
-  //   @Body() body: { status?: string; vehicleNumber?: string; reason?: string },
-  //   @CurrentUser() user: AuthUser,
-  // ) {
-  //   const newStatus = body?.status || 'SHIPPED'
-  //   const updated = await this.productsService.updateStatus(
-  //     id,
-  //     newStatus,
-  //     Number(user?.id) || undefined,
-  //     {
-  //       vehicleNumber: body?.vehicleNumber,
-  //       reason: body?.reason,
-  //     },
-  //   )
-  //   return ok(updated, `Product marked as ${newStatus}`)
-  // }
+  @Post(':id/status')
+  @Roles('ADMIN')
+  async updateStatus(
+    @Param('id') id: string,
+    @Body() body: { status?: string; vehicleNumber?: string; reason?: string; source?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    const newStatus = (body?.status || 'SHIPPED').trim().toUpperCase()
+    const updated = await this.productsService.updateStatus(
+      id,
+      newStatus,
+      Number(user?.id) || undefined,
+      {
+        vehicleNumber: body?.vehicleNumber,
+        reason: body?.reason,
+        source: body?.source || 'Dashboard',
+        userName: user?.fullName || user?.name || user?.email || 'Admin',
+      },
+    )
+    return ok(updated, `Item status updated to ${newStatus}`)
+  }
 
   @Get(':id/history')
   async history(@Param('id') id: string) {

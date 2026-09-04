@@ -2,11 +2,14 @@ import { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderKanban, Briefcase, Package, ChevronRight, ArrowLeft,
-  Search, ChevronUp, ChevronDown, X, CheckCircle, Clock, Tag
+  Search, ChevronUp, ChevronDown, X, CheckCircle, Clock, Tag, Trash2
 } from 'lucide-react';
 import type { Part, TrackingStatus } from '../data/mockData';
 import { api } from '../services/api';
 import PartDrawer from '../components/PartDrawer';
+import { useApp } from '../store/AppContext';
+import { getSocket } from '../services/socket';
+import { isStatusChangeLocked, statusLockMessage } from '../utils/statusLock';
 
 const ITEM_SCHEDULE_HEADERS = [
   'Item',
@@ -159,6 +162,60 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`badge ${cls}`}><span className="badge-dot" />{label}</span>;
 }
 
+function statusSelectValue(status: string): 'PENDING' | 'SHIPPED' {
+  return String(status || 'PENDING').toUpperCase() === 'SHIPPED' ? 'SHIPPED' : 'PENDING';
+}
+
+function parseTrackingUnitId(trId: string): number | null {
+  const m = String(trId).match(/^tr-(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+function AdminStatusSelect({
+  status,
+  disabled,
+  locked,
+  onSelect,
+}: {
+  status: string;
+  disabled?: boolean;
+  locked?: boolean;
+  onSelect: (status: string) => void;
+}) {
+  const isShipped = statusSelectValue(status) === 'SHIPPED';
+  if (!isShipped) {
+    return (
+      <span title="Scan on mobile to mark as shipped">
+        <StatusBadge status={status} />
+      </span>
+    );
+  }
+  if (locked) {
+    return (
+      <span title={statusLockMessage()}>
+        <StatusBadge status="SHIPPED" />
+      </span>
+    );
+  }
+  return (
+    <select
+      className="form-select"
+      value="SHIPPED"
+      disabled={disabled}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        e.stopPropagation();
+        if (e.target.value === 'PENDING') onSelect('PENDING');
+      }}
+      style={{ fontSize: 11, padding: '2px 6px', minWidth: 88, fontWeight: 700 }}
+    >
+      <option value="SHIPPED">Shipped</option>
+      <option value="PENDING">Active</option>
+    </select>
+  );
+}
+
 function compareSchedule(
   a: string | number | boolean | null | undefined,
   b: string | number | boolean | null | undefined,
@@ -180,6 +237,8 @@ function compareSchedule(
 }
 
 export default function Projects() {
+  const { currentUser } = useApp();
+  const isAdmin = String(currentUser?.role || '').toUpperCase() === 'ADMIN';
   const [params, setParams] = useSearchParams();
   // Import page disabled — jobs come from DataUploads folder sync
   // const navigate = useNavigate();
@@ -224,12 +283,13 @@ export default function Projects() {
     return {
       id: String(j.id),
       projectId: String(j.project?.id || 'p1'),
-      sourceJobId: Number(j.code || j.sourceJobId) || 70037,
+      sourceJobId: String(j.sourceJobId || j.code || j.id),
       downloadId: Number(j.t4vjobDownloadId) || 68,
       jobName: j.name || j.jobName,
       projectName: j.project?.name || j.project?.projectName || 'Project',
+      importVersion: Number(j.importVersion ?? 1),
       status: (totalParts > 0 && pendingParts === 0 ? 'SHIPPED' : 'ACTIVE') as 'SHIPPED' | 'ACTIVE',
-      importedAt: new Date().toISOString(),
+      importedAt: j.createdAt || new Date().toISOString(),
       importedBy: 'Admin',
       totalParts,
       shippedParts,
@@ -245,7 +305,9 @@ export default function Projects() {
   }, [projectId, allProjects]);
 
   const selectedJob = useMemo(() => {
-    return (selectedProject && jobId) ? allJobs.find(j => j.id === jobId && j.projectId === selectedProject.id) || null : null;
+    return (selectedProject && jobId)
+      ? allJobs.find(j => j.id === jobId && j.projectId === selectedProject.id) || null
+      : null;
   }, [selectedProject, jobId, allJobs]);
 
   // Level 3 (Parts) state
@@ -266,61 +328,143 @@ export default function Projects() {
     values: Record<string, string | number | boolean | null>;
   }>>([]);
 
+  const [archivingJobId, setArchivingJobId] = useState<string | null>(null);
+  const [statusUpdatingKey, setStatusUpdatingKey] = useState<string | null>(null);
+
   const selectedJobSourceId = selectedJob ? String(selectedJob.sourceJobId || selectedJob.id) : null;
 
-  useEffect(() => {
-    if (selectedJob && selectedJobSourceId) {
-      api.getItemSchedule(selectedJobSourceId)
-        .then((res) => {
-          if (res?.items) {
-            const mapped: Part[] = res.items.map((item) => {
-              const values = item.values || {};
-              const pieceRaw = scheduleLookup(values, 'PieceNbr');
-              return {
-                id: String(item.id),
-                jobId: selectedJob.id,
-                pieceNbr: typeof pieceRaw === 'string' || typeof pieceRaw === 'number' ? pieceRaw : item.sourceItemId,
-                fitting: String(values.Item || '—'),
-                itemId: item.sourceItemId,
-                description: String(values.Information || ''),
-                metal: values.Metal != null ? String(values.Metal) : '',
-                information: values.Information != null ? String(values.Information) : '',
-                area: typeof values.Area === 'number' ? values.Area : undefined,
-                weight: typeof values.Weight === 'number' ? values.Weight : undefined,
-                status: (item.status || 'PENDING') as TrackingStatus,
-                trackingDateTime: item.trackingDateTime || null,
-                schedule: values,
-                trackingRecords: (item.trackingRecords || []).map((tr) => ({
-                  id: tr.id,
-                  partId: tr.partId,
-                  itemTracking: tr.itemTracking,
-                  qrCode: tr.qrCode,
-                  status: tr.status as TrackingStatus,
-                  trackingDateTime: tr.trackingDateTime || null,
-                })),
-              };
-            });
-            setLiveParts(mapped);
-          }
-        })
-        .catch(() => {});
-      api.getTrackingExport(selectedJobSourceId)
-        .then((res) => {
-          if (res?.items) {
-            setLiveTracking(res.items.map((row) => ({
-              id: String(row.id),
-              status: row.status || 'PENDING',
-              trackingDateTime: row.trackingDateTime || null,
-              values: row.values || {},
-            })));
-          }
-        })
-        .catch(() => setLiveTracking([]));
-    } else {
+  async function loadJobPartData(): Promise<Part[]> {
+    if (!selectedJob || !selectedJobSourceId) {
       setLiveParts([]);
       setLiveTracking([]);
+      return [];
     }
+    let mapped: Part[] = [];
+    try {
+      const res = await api.getItemSchedule(selectedJobSourceId);
+      if (res?.items) {
+        mapped = res.items.map((item) => {
+          const values = item.values || {};
+          const pieceRaw = scheduleLookup(values, 'PieceNbr');
+          return {
+            id: String(item.id),
+            jobId: selectedJob.id,
+            pieceNbr: typeof pieceRaw === 'string' || typeof pieceRaw === 'number' ? pieceRaw : item.sourceItemId,
+            fitting: String(values.Item || '—'),
+            itemId: item.sourceItemId,
+            description: String(values.Information || ''),
+            metal: values.Metal != null ? String(values.Metal) : '',
+            information: values.Information != null ? String(values.Information) : '',
+            area: typeof values.Area === 'number' ? values.Area : undefined,
+            weight: typeof values.Weight === 'number' ? values.Weight : undefined,
+            status: (item.status || 'PENDING') as TrackingStatus,
+            trackingDateTime: item.trackingDateTime || null,
+            schedule: values,
+            trackingRecords: (item.trackingRecords || []).map((tr) => ({
+              id: tr.id,
+              partId: tr.partId,
+              itemTracking: tr.itemTracking,
+              qrCode: tr.qrCode,
+              status: tr.status as TrackingStatus,
+              trackingDateTime: tr.trackingDateTime || null,
+            })),
+          };
+        });
+        setLiveParts(mapped);
+      }
+    } catch {
+      /* keep previous */
+    }
+    try {
+      const trackingRes = await api.getTrackingExport(selectedJobSourceId);
+      if (trackingRes?.items) {
+        setLiveTracking(trackingRes.items.map((row) => ({
+          id: String(row.id),
+          status: row.status || 'PENDING',
+          trackingDateTime: row.trackingDateTime || null,
+          values: row.values || {},
+        })));
+      }
+    } catch {
+      setLiveTracking([]);
+    }
+    return mapped;
+  }
+
+  async function refreshJobParts() {
+    const mapped = await loadJobPartData();
+    loadData();
+    if (selectedPart) {
+      const updated = mapped.find((p) => p.id === selectedPart.id);
+      if (updated) setSelectedPart(updated);
+    }
+  }
+
+  async function handleUnitStatusChange(unitId: number, newStatus: string) {
+    if (!unitId) return;
+    setStatusUpdatingKey(`unit-${unitId}`);
+    try {
+      await api.updateProductStatus(unitId, {
+        status: newStatus,
+        source: 'Projects',
+        reason: `Status set to ${newStatus} from projects`,
+      });
+      await refreshJobParts();
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Could not update item status');
+    } finally {
+      setStatusUpdatingKey(null);
+    }
+  }
+
+  async function handleScheduleItemStatusChange(part: Part, newStatus: string) {
+    const unitIds = part.trackingRecords
+      .map((tr) => parseTrackingUnitId(tr.id))
+      .filter((id): id is number => id != null);
+    if (!unitIds.length) return;
+    setStatusUpdatingKey(`item-${part.id}`);
+    try {
+      await Promise.all(
+        unitIds.map((unitId) =>
+          api.updateProductStatus(unitId, {
+            status: newStatus,
+            source: 'Projects',
+            reason: `Status set to ${newStatus} from projects (schedule item)`,
+          }),
+        ),
+      );
+      await refreshJobParts();
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Could not update item status');
+    } finally {
+      setStatusUpdatingKey(null);
+    }
+  }
+
+  useEffect(() => {
+    loadJobPartData();
   }, [selectedJob?.id, selectedJobSourceId]);
+
+  useEffect(() => {
+    const sock = getSocket();
+    const onLiveUpdate = () => {
+      loadData();
+      loadJobPartData().then((mapped) => {
+        if (selectedPart) {
+          const updated = mapped.find((p) => p.id === selectedPart.id);
+          if (updated) setSelectedPart(updated);
+        }
+      });
+    };
+    sock.on('dashboard:scan', onLiveUpdate);
+    sock.on('dashboard:kpi', onLiveUpdate);
+    sock.on('dashboard:dispatch_complete', onLiveUpdate);
+    return () => {
+      sock.off('dashboard:scan', onLiveUpdate);
+      sock.off('dashboard:kpi', onLiveUpdate);
+      sock.off('dashboard:dispatch_complete', onLiveUpdate);
+    };
+  }, [selectedPart?.id, selectedJob?.id, selectedJobSourceId]);
 
   const jobParts = liveParts;
 
@@ -389,6 +533,25 @@ export default function Projects() {
     setSortDir('asc');
     setTableView('schedule');
     setPage(1);
+  }
+
+  async function handleArchiveJob(jobId: string, jobName: string) {
+    const ok = window.confirm(
+      `Delete "${jobName}"?\n\nAll parts for this job will be removed. A summary is kept on Admin → Archived jobs. Re-importing the same job will show v2 on the Dashboard.`,
+    );
+    if (!ok) return;
+    setArchivingJobId(jobId);
+    try {
+      await api.archiveJob(jobId);
+      if (params.get('job') === jobId) {
+        selectJob(null);
+      }
+      loadData();
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Could not delete job');
+    } finally {
+      setArchivingJobId(null);
+    }
   }
 
   function selectJob(jId: string | null) {
@@ -488,10 +651,11 @@ export default function Projects() {
           <div className="page-header-row" style={{ alignItems: 'flex-start' }}>
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 800 }}>{selectedJob.jobName}</h2>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <span>{selectedProject.name}</span>
                 <span>·</span>
                 <span className="chip" style={{ fontSize: 11 }}>Job ID: {selectedJob.sourceJobId}</span>
+                <span className="chip" style={{ fontSize: 11 }}>Upload v{selectedJob.importVersion}</span>
                 <span className="chip" style={{ fontSize: 11 }}>Download ID: {selectedJob.downloadId}</span>
               </div>
             </div>
@@ -632,7 +796,16 @@ export default function Projects() {
                           title={header === 'Status' ? part.status || 'PENDING' : header === DATETIME_HEADER ? formatTimestamp(part.trackingDateTime) : scheduleCell(scheduleLookup(part.schedule, header))}
                         >
                           {header === 'Status'
-                            ? <StatusBadge status={part.status || 'PENDING'} />
+                            ? isAdmin && part.trackingRecords.length > 0
+                              ? (
+                                <AdminStatusSelect
+                                  status={part.status || 'PENDING'}
+                                  disabled={statusUpdatingKey === `item-${part.id}`}
+                                  locked={isStatusChangeLocked(part.trackingDateTime)}
+                                  onSelect={(newStatus) => handleScheduleItemStatusChange(part, newStatus)}
+                                />
+                              )
+                              : <StatusBadge status={part.status || 'PENDING'} />
                             : header === DATETIME_HEADER
                               ? formatTimestamp(part.trackingDateTime)
                               : scheduleCell(scheduleLookup(part.schedule, header))}
@@ -672,7 +845,16 @@ export default function Projects() {
                           title={header === 'Status' ? row.status : header === DATETIME_HEADER ? formatTimestamp(row.trackingDateTime) : trackingCell(header, row.values[header])}
                         >
                           {header === 'Status'
-                            ? <StatusBadge status={row.status} />
+                            ? isAdmin
+                              ? (
+                                <AdminStatusSelect
+                                  status={row.status}
+                                  disabled={statusUpdatingKey === `unit-${row.id}`}
+                                  locked={isStatusChangeLocked(row.trackingDateTime)}
+                                  onSelect={(newStatus) => handleUnitStatusChange(Number(row.id), newStatus)}
+                                />
+                              )
+                              : <StatusBadge status={row.status} />
                             : header === DATETIME_HEADER
                               ? formatTimestamp(row.trackingDateTime)
                               : trackingCell(header, row.values[header])}
@@ -700,6 +882,7 @@ export default function Projects() {
             onClose={() => setSelectedPart(null)}
             projectName={selectedProject?.name}
             jobName={selectedJob?.jobName}
+            onRefresh={refreshJobParts}
           />
         )}
       </div>
@@ -794,8 +977,9 @@ export default function Projects() {
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
                       <div>
                         <div style={{ fontWeight: 700, fontSize: 16 }}>{job.jobName}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', gap: 8 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <span className="chip" style={{ fontSize: 10 }}>Job ID: {job.sourceJobId}</span>
+                          <span className="chip" style={{ fontSize: 10 }}>Upload v{job.importVersion}</span>
                           <span className="chip" style={{ fontSize: 10 }}>Download: {job.downloadId}</span>
                         </div>
                       </div>
@@ -803,6 +987,19 @@ export default function Projects() {
                         <span className={`badge badge-${job.status.toLowerCase()}`}>
                           {job.status === 'SHIPPED' ? 'Shipped' : 'Active'}
                         </span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          title="Delete job"
+                          style={{ color: 'var(--red-600)', padding: '4px 8px' }}
+                          disabled={archivingJobId === job.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleArchiveJob(job.id, job.jobName);
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                         <div className="btn btn-secondary btn-sm" style={{ padding: '4px 10px', fontSize: 12 }}>
                           View Parts <ChevronRight size={13} />
                         </div>

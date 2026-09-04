@@ -76,6 +76,7 @@ export async function getTransit(id: string) {
           fitting: string | null
           job: {
             code: string
+            name?: string
             project: { code: string; client: { name: string } }
           }
         }
@@ -84,16 +85,24 @@ export async function getTransit(id: string) {
         client: string
         projects: Array<{
           project: string
-          products: Array<{
-            productId: string
-            pieceNumber: string
-            fitting: string | null
+          partCount: number
+          jobCount: number
+          jobs: Array<{
             jobCode: string
-            scannedAt: string
+            jobName: string
+            partCount: number
+            products: Array<{
+              productId: string
+              pieceNumber: string
+              fitting: string | null
+              jobCode: string
+              jobName?: string
+              scannedAt: string
+            }>
           }>
         }>
       }>
-      summary: { products: number; clients: number; projects: number }
+      summary: { products: number; clients: number; projects: number; jobs: number }
     }
   >(`/api/transits/${id}`)
 }
@@ -178,5 +187,12 @@ export async function completeTransit(transitId: string) {
   return apiRequest<TransitSummary & { productsLoaded: number }>(
     `/api/transits/${transitId}/complete`,
     { method: 'POST' },
+  )
+}
+
+export async function deleteTransit(transitId: string) {
+  return apiRequest<{ id: number; deleted: boolean; partsReleased: number }>(
+    `/api/transits/${transitId}`,
+    { method: 'DELETE' },
   )
 }

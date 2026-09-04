@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
+import { isStatusChangeLocked } from '../products/status-lock.util'
 
 @Injectable()
 export class DashboardService {
@@ -15,7 +16,6 @@ export class DashboardService {
       activeTransits,
       completedTransits,
       rangeTransits,
-      rangeLoaded,
     ] = await Promise.all([
       this.prisma.itemUnit.count(),
       this.prisma.itemUnit.count({ where: { currentStatus: 'PENDING' } }),
@@ -27,67 +27,18 @@ export class DashboardService {
       this.prisma.dispatch.count({
         where: { startedAt: { gte: from, lte: to } },
       }),
-      this.prisma.dispatchPart.count({
-        where: { loadedAt: { gte: from, lte: to } },
-      }),
     ])
+
+    const rangeLoaded = await this.countShippedUnitsInRange(from, to)
 
     const diffMs = to.getTime() - from.getTime()
     const diffDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
 
-    const [dailyLoading, dailyTransits, recentTrackingEvents] = await Promise.all([
+    const [dailyLoading, dailyTransits, recentEvents] = await Promise.all([
       this.buildSeriesGroupBy(from, to, diffDays, 'products'),
       this.buildSeriesGroupBy(from, to, diffDays, 'transits'),
-      this.prisma.trackingEvent.findMany({
-        take: 200,
-        where: {
-          createdAt: { gte: from, lte: to },
-          // Completing a dispatch writes a SHIP event for every loaded part.
-          // Those are not scans — include the original SCAN plus portal ship-from-manual-track.
-          OR: [{ eventType: 'SCAN' }, { source: 'Portal scan' }],
-        },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          itemUnit: {
-            include: {
-              item: true,
-              job: { include: { project: true } },
-            },
-          },
-          user: { select: { id: true, name: true, email: true } },
-        },
-      }),
+      this.buildLiveTrackingEvents(from, to),
     ])
-
-    const recentEvents = recentTrackingEvents.map((ev) => {
-      const unit = ev.itemUnit
-      const item = unit?.item
-      const job = unit?.job
-      const trackingCode =
-        unit?.sourceItemTrackingId != null ? String(unit.sourceItemTrackingId) : ''
-      const isMobile =
-        String(ev.source || '').toUpperCase().includes('MOBILE') ||
-        Boolean(ev.dispatchId)
-
-      return {
-        id: ev.id,
-        pieceNo: item?.pieceNumber ?? '—',
-        fitting: item?.fitting || '—',
-        itemTracking: trackingCode || '—',
-        itemId: item ? String(item.sourceItemId) : '—',
-        projectName: job?.project?.projectName || '—',
-        jobName:
-          job?.jobName ||
-          (job?.sourceJobId ? `Job #${job.sourceJobId}` : '—'),
-        jobCode: job?.sourceJobId || '—',
-        vehicleNumber: ev.vehicleNumber || '—',
-        status: ev.status || 'SHIPPED',
-        eventType: ev.eventType || 'SCAN',
-        source: isMobile ? 'Mobile scan' : 'Portal scan',
-        userName: ev.user?.name || ev.user?.email || 'Operator',
-        timestamp: ev.createdAt,
-      }
-    })
 
     return {
       kpi: {
@@ -121,10 +72,98 @@ export class DashboardService {
   }
 
   async getScansByDateRange(from: Date, to: Date): Promise<{ count: number }> {
-    const count = await this.prisma.dispatchPart.count({
-      where: { loadedAt: { gte: from, lte: to } },
-    })
+    const count = await this.countShippedUnitsInRange(from, to)
     return { count }
+  }
+
+  /** Units still shipped that were scanned or portal-marked shipped in the date range. */
+  async getShippedScanCount(from: Date, to: Date): Promise<number> {
+    return this.countShippedUnitsInRange(from, to)
+  }
+
+  /** Units still shipped that were scanned or portal-marked shipped in the date range. */
+  private async countShippedUnitsInRange(from: Date, to: Date): Promise<number> {
+    return this.prisma.itemUnit.count({
+      where: {
+        currentStatus: 'SHIPPED',
+        trackingEvents: {
+          some: this.periodScanEventWhere(from, to),
+        },
+      },
+    })
+  }
+
+  private periodScanEventWhere(from: Date, to: Date) {
+    return {
+      createdAt: { gte: from, lte: to },
+      eventType: { in: ['SCAN', 'SHIP'] },
+    }
+  }
+
+  /** One row per unit still shipped with a scan/ship event in the selected period. */
+  private async buildLiveTrackingEvents(from: Date, to: Date) {
+    const periodWhere = this.periodScanEventWhere(from, to)
+    const units = await this.prisma.itemUnit.findMany({
+      where: {
+        currentStatus: 'SHIPPED',
+        trackingEvents: { some: periodWhere },
+      },
+      include: {
+        item: true,
+        job: { include: { project: true } },
+        trackingEvents: {
+          where: periodWhere,
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            user: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    })
+
+    return units
+      .filter((unit) => unit.trackingEvents.length > 0)
+      .map((unit) => {
+        const ev = unit.trackingEvents[0]
+        const item = unit.item
+        const job = unit.job
+        const trackingCode =
+          unit.sourceItemTrackingId != null ? String(unit.sourceItemTrackingId) : ''
+        const isMobile =
+          String(ev.source || '').toUpperCase().includes('MOBILE') ||
+          Boolean(ev.dispatchId)
+        const portalSource = ['PORTAL SCAN', 'DASHBOARD', 'PROJECTS'].includes(
+          String(ev.source || '').toUpperCase(),
+        )
+
+        return {
+          id: ev.id,
+          unitId: unit.id,
+          pieceNo: item?.pieceNumber ?? '—',
+          fitting: item?.fitting || '—',
+          itemTracking: trackingCode || '—',
+          itemId: item ? String(item.sourceItemId) : '—',
+          projectName: job?.project?.projectName || '—',
+          jobName:
+            job?.jobName ||
+            (job?.sourceJobId ? `Job #${job.sourceJobId}` : '—'),
+          jobCode: job?.sourceJobId || '—',
+          vehicleNumber: ev.vehicleNumber || '—',
+          status: unit.currentStatus,
+          eventType: ev.eventType || 'SCAN',
+          source: isMobile
+            ? 'Mobile scan'
+            : portalSource
+              ? 'Portal scan'
+              : ev.source || 'Portal scan',
+          userName: ev.user?.name || ev.user?.email || 'Operator',
+          timestamp: ev.createdAt,
+          statusLocked: isStatusChangeLocked(unit.trackingDate || ev.createdAt),
+        }
+      })
   }
 
   private async buildSeriesGroupBy(
@@ -137,12 +176,20 @@ export class DashboardService {
     const bucketCount = isWeekly ? Math.min(Math.ceil(diffDays / 7), 52) : diffDays
 
     if (kind === 'products') {
-      const rows = await this.prisma.dispatchPart.findMany({
-        where: { loadedAt: { gte: from, lte: to } },
-        select: { loadedAt: true },
+      const rows = await this.prisma.trackingEvent.findMany({
+        where: {
+          ...this.periodScanEventWhere(from, to),
+          itemUnit: { currentStatus: 'SHIPPED' },
+        },
+        select: { itemUnitId: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
       })
+      // One point per part so the chart matches the "Scans in Period" KPI: a part sent
+      // back to Active and then rescanned must not be counted twice.
+      const latestPerUnit = new Map<number, Date>()
+      for (const row of rows) latestPerUnit.set(row.itemUnitId, row.createdAt)
       return this.bucketRows(
-        rows.map((r) => r.loadedAt),
+        Array.from(latestPerUnit.values()),
         from,
         bucketCount,
         isWeekly,

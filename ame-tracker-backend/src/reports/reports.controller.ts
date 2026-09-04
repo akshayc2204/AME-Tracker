@@ -112,6 +112,51 @@ export class ReportsController {
   }
 
   /**
+   * Previews end-of-day Fitting Weight List (shipped parts table only).
+   */
+  @Get('fitting-weight-list/preview')
+  async previewFittingWeightList(
+    @Query('projectId') projectId?: string,
+    @Query('jobId') jobId?: string,
+    @Query('date') date?: string,
+  ) {
+    return ok(
+      await this.reportsService.getFittingWeightListPreview({
+        projectId: projectId ? Number(projectId) : undefined,
+        jobId: jobId ? Number(jobId) : undefined,
+        date: date || undefined,
+      }),
+    )
+  }
+
+  /**
+   * Downloads Fitting Weight List Excel for parts shipped on the date
+   * (FabShop P47184.xls table layout — no pie chart / header block).
+   */
+  @Get('fitting-weight-list.xlsx')
+  async downloadFittingWeightList(
+    @Res({ passthrough: true }) response: Response,
+    @Query('projectId') projectId?: string,
+    @Query('jobId') jobId?: string,
+    @Query('date') date?: string,
+  ) {
+    const report = await this.reportsService.generateFittingWeightList({
+      projectId: projectId ? Number(projectId) : undefined,
+      jobId: jobId ? Number(jobId) : undefined,
+      date: date || undefined,
+    })
+
+    response.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${report.filename}"`,
+      'Content-Length': report.buffer.length,
+    })
+
+    return new StreamableFile(report.buffer)
+  }
+
+  /**
    * Previews Shipping List rows (per project + trolley) before PDF download.
    */
   @Get('gate-pass/preview')

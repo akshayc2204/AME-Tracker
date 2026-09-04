@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -132,6 +133,12 @@ export class TransitsController {
       await this.transitsService.updateVehicleNumber(id, body.vehicleNumber, user),
       'Vehicle number updated',
     )
+  }
+
+  @Delete(':id')
+  @Roles('OPERATOR', 'ADMIN')
+  async remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return ok(await this.transitsService.remove(id, user), 'Dispatch deleted')
   }
 
   @Post(':id/complete')

@@ -331,19 +331,55 @@ export const api = {
     return (await request<Array<{ id: number; projectName: string; _count: { jobs: number } }>>(`/projects${query}`)).data;
   },
 
-  async getJobs(search?: string) {
-    const query = search ? `?search=${encodeURIComponent(search)}` : '';
+  async getJobs(search?: string, projectId?: number) {
+    const query = new URLSearchParams();
+    if (search) query.set('search', search);
+    if (projectId) query.set('projectId', String(projectId));
+    const qs = query.toString() ? `?${query.toString()}` : '';
     return (
       await request<
         Array<{
           id: number;
           code: string;
           name: string;
+          sourceJobId: string;
+          importVersion?: number;
+          createdAt?: string;
           t4vjobDownloadId?: string;
           project: { id: number; code: string; name: string; client: { name: string } };
           _count: { products: number };
+          totalParts?: number;
+          shippedParts?: number;
+          pendingParts?: number;
         }>
-      >(`/jobs${query}`)
+      >(`/jobs${qs}`)
+    ).data;
+  },
+
+  async getJobArchives() {
+    return (
+      await request<
+        Array<{
+          id: number;
+          projectName: string;
+          sourceJobId: string;
+          jobName: string;
+          importVersion: number;
+          totalParts: number;
+          archivedAt: string;
+        }>
+      >('/jobs/archives')
+    ).data;
+  },
+
+  async archiveJob(id: number | string) {
+    return (
+      await request<{
+        sourceJobId: string;
+        jobName: string;
+        importVersion: number;
+        totalParts: number;
+      }>(`/jobs/${id}`, { method: 'DELETE' })
     ).data;
   },
 
@@ -432,35 +468,13 @@ export const api = {
   },
 
   // Manual Tracking disabled for now — used only by ManualTrack.tsx
-  async updateProductStatus(id: string | number, payload: { status: string; qrCode?: string; vehicleNumber?: string; reason?: string }) {
-    markItemAsPortalScanned(id);
+  async updateProductStatus(id: string | number, payload: { status: string; qrCode?: string; vehicleNumber?: string; reason?: string; source?: string }) {
     if (payload.qrCode) markItemAsPortalScanned(payload.qrCode);
-    try {
-      const res = await request<any>(`/products/${id}/status`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      return res.data;
-    } catch {
-      // Resilient fallback for when backend process hasn't reloaded
-      if (payload.qrCode) {
-        const dispatches = await this.getDispatches().catch(() => ({ items: [] }));
-        let activeDispatch = dispatches.items?.find((d: any) => d.status === 'OPEN' || d.status === 'ACTIVE');
-        if (!activeDispatch) {
-          activeDispatch = await this.createDispatch().catch(() => null);
-        }
-        if (activeDispatch?.id) {
-          await this.scanPart(activeDispatch.id, payload.qrCode);
-          return {
-            id: String(id),
-            currentStatus: 'SHIPPED',
-            shippedAt: new Date().toISOString(),
-            trackEvent: 'Portal scan',
-          };
-        }
-      }
-      throw new Error('Unable to mark product as shipped. Please try again.');
-    }
+    const res = await request<any>(`/products/${id}/status`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res.data;
   },
 
   // File Ingestion
@@ -810,6 +824,81 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
+  /** Preview end-of-day Fitting Weight List (shipped parts table) */
+  async getFittingWeightListPreview(params?: {
+    date?: string
+    projectId?: number
+    jobId?: number
+  }): Promise<{
+    filename: string
+    date: string
+    displayDate: string
+    rowCount: number
+    unitCount: number
+    totalQty: number
+    totalArea: number
+    totalWeight: number
+    message: string
+    sections: Array<{
+      fitting: string
+      qty: number
+      area: number
+      weight: number
+      rows: Array<{
+        fitting: string
+        projectName: string
+        jobName: string
+        pieceNumber: string
+        qty: number
+        width: number | null
+        depth: number | null
+        length: number | null
+        size: string
+        area: number
+        weight: number
+      }>
+    }>
+  }> {
+    const query = new URLSearchParams();
+    if (params?.date) query.set('date', params.date);
+    if (params?.projectId) query.set('projectId', String(params.projectId));
+    if (params?.jobId) query.set('jobId', String(params.jobId));
+    return (await request<any>(`/reports/fitting-weight-list/preview?${query.toString()}`)).data;
+  },
+
+  /** Download Fitting Weight List Excel for shipped parts on a date */
+  async downloadFittingWeightList(params?: {
+    date?: string
+    projectId?: number
+    jobId?: number
+  }): Promise<void> {
+    const query = new URLSearchParams();
+    if (params?.date) query.set('date', params.date);
+    if (params?.projectId) query.set('projectId', String(params.projectId));
+    if (params?.jobId) query.set('jobId', String(params.jobId));
+
+    const token = getAuthToken();
+    const res = await fetch(`${API_BASE_URL}/reports/fitting-weight-list.xlsx?${query.toString()}`, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to download Fitting Weight List (${res.status})`);
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `FITTING_WEIGHT_LIST_${params?.date || new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  },
+
   /** Preview Shipping List (project + trolley piece lists) before PDF download */
   async getGatePassPreview(params?: {
     date?: string
@@ -822,7 +911,8 @@ export const api = {
     displayDate: string
     passCount: number
     totalPieces: number
-    totalWeight: number
+    totalJobShipped: number
+    totalJobParts: number
     trolleys: string[]
     projects: string[]
     message: string
@@ -832,12 +922,15 @@ export const api = {
       projectShortName: string
       trolley: string
       shippingDate: string
-      actualWeight: number
       totalPieces: number
+      totalJobShipped: number
+      totalJobParts: number
       jobs: Array<{
         jobName: string
         account?: string
         pieceCount: number
+        shippedParts: number
+        totalParts: number
         pieces: Array<{
           pieceNumber: string
           item: string

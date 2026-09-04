@@ -15,15 +15,16 @@ import {
   Platform,
 } from 'react-native'
 import { router, useFocusEffect } from 'expo-router'
-import { Package, Truck, X, ArrowRight } from 'lucide-react-native'
+import { Package, Truck, X, ArrowRight, Trash2 } from 'lucide-react-native'
 import { useAuth } from '@/context/AuthContext'
-import { createTransit, listTransits } from '@/services/transits'
+import { createTransit, deleteTransit, listTransits } from '@/services/transits'
 import { ApiClientError } from '@/services/api'
 import type { TransitSummary } from '@/types/api'
 
 export default function HomeScreen() {
   const { user } = useAuth()
   const [creating, setCreating] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [recent, setRecent] = useState<TransitSummary[]>([])
   const [loadingRecent, setLoadingRecent] = useState(false)
 
@@ -49,24 +50,47 @@ export default function HomeScreen() {
     }, [loadRecent]),
   )
 
+  const handleDeleteRecent = (item: TransitSummary) => {
+    if (item.status !== 'ACTIVE' || deletingId) return
+    Alert.alert(
+      'Delete Dispatch?',
+      'This dispatch is not completed yet. It will be removed, and any scanned parts will go back to pending.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => void confirmDeleteRecent(item),
+        },
+      ],
+    )
+  }
+
+  const confirmDeleteRecent = async (item: TransitSummary) => {
+    setDeletingId(String(item.id))
+    try {
+      await deleteTransit(String(item.id))
+      await loadRecent()
+    } catch (e) {
+      Alert.alert(
+        'Cannot Delete',
+        e instanceof ApiClientError ? e.message : 'Unable to delete this dispatch',
+      )
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const openNewDispatchModal = () => {
-    // Generate a default Kuwait style plate as placeholder/suggestion
-    const randomPlate = `18/${String(Math.floor(10000 + Math.random() * 90000))}`
-    setVehicleNumberInput(randomPlate)
+    setVehicleNumberInput('')
     setVehicleModalVisible(true)
   }
 
-  const handleConfirmNewDispatch = async () => {
-    const trimmed = vehicleNumberInput.trim()
-    if (!trimmed) {
-      Alert.alert('Vehicle No. Required', 'Please enter a valid vehicle number.')
-      return
-    }
-
+  const startDispatch = async (vehicleNumber?: string) => {
     setVehicleModalVisible(false)
     setCreating(true)
     try {
-      const transit = await createTransit(trimmed)
+      const transit = await createTransit(vehicleNumber)
       router.push(`/transit/${transit.id}`)
     } catch (e) {
       const message =
@@ -77,6 +101,11 @@ export default function HomeScreen() {
     } finally {
       setCreating(false)
     }
+  }
+
+  const handleConfirmNewDispatch = async () => {
+    const trimmed = vehicleNumberInput.trim()
+    await startDispatch(trimmed || undefined)
   }
 
   return (
@@ -109,7 +138,7 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.primaryTitle}>NEW DISPATCH</Text>
           <Text style={styles.primarySubtitle}>
-            Enter Vehicle No. and capture vehicle photo
+            Vehicle number and photo are optional
           </Text>
         </TouchableOpacity>
 
@@ -129,7 +158,11 @@ export default function HomeScreen() {
                 <Package size={20} color="#047857" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.transitNumber}>{item.transitNumber}</Text>
+                <Text style={styles.transitNumber}>
+                  {/^Dispatch #\d+$/i.test(item.transitNumber)
+                    ? 'No vehicle'
+                    : item.transitNumber}
+                </Text>
                 <Text style={styles.transitMeta}>
                   {item.status}
                   {item._count
@@ -137,6 +170,19 @@ export default function HomeScreen() {
                     : ''}
                 </Text>
               </View>
+              {item.status === 'ACTIVE' ? (
+                <TouchableOpacity
+                  style={styles.listDeleteBtn}
+                  onPress={() => handleDeleteRecent(item)}
+                  disabled={deletingId === String(item.id)}
+                >
+                  {deletingId === String(item.id) ? (
+                    <ActivityIndicator color="#DC2626" size="small" />
+                  ) : (
+                    <Trash2 size={18} color="#DC2626" />
+                  )}
+                </TouchableOpacity>
+              ) : null}
             </TouchableOpacity>
           ))
         )}
@@ -157,7 +203,7 @@ export default function HomeScreen() {
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Truck size={22} color="#078710" />
-                <Text style={styles.modalTitle}>Enter Vehicle Number</Text>
+                <Text style={styles.modalTitle}>Vehicle Number (Optional)</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setVehicleModalVisible(false)}
@@ -168,11 +214,11 @@ export default function HomeScreen() {
             </View>
 
             <Text style={styles.modalDesc}>
-              Enter the vehicle plate number (Kuwait style: e.g. 18/54405) before loading parts and clicking vehicle photo.
+              You can enter the plate now, skip it, or add vehicle number and photo later — dispatch can still be completed without them.
             </Text>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>VEHICLE NO / PLATE #</Text>
+              <Text style={styles.inputLabel}>VEHICLE NO / PLATE # (OPTIONAL)</Text>
               <TextInput
                 style={styles.input}
                 value={vehicleNumberInput}
@@ -188,9 +234,9 @@ export default function HomeScreen() {
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.cancelBtn}
-                onPress={() => setVehicleModalVisible(false)}
+                onPress={() => void startDispatch()}
               >
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+                <Text style={styles.cancelBtnText}>Skip for now</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -291,6 +337,14 @@ const styles = StyleSheet.create({
   },
   transitNumber: { fontSize: 16, fontWeight: '700', color: '#111827' },
   transitMeta: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+  listDeleteBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Modal Styles
   modalOverlay: {

@@ -5,6 +5,7 @@ import * as QRCode from 'qrcode'
 import { z } from 'zod'
 import { PrismaService } from '../prisma/prisma.service'
 import { schedulePieceNbr } from '../imports/item-schedule'
+import { findJobBySourceJobId } from '../jobs/job-version.util'
 
 const REPORT_HEADERS = [
   'Item',
@@ -478,6 +479,458 @@ export class ReportsService {
     }
   }
 
+  /**
+   * End-of-day Fitting Weight List for parts shipped on the report date.
+   * Matches FabShop 'Fitting Weight List' (P47184.xls) piece table only —
+   * no pie chart and no Project/Job/Account header block above it.
+   */
+  async generateFittingWeightList(filtersInput?: {
+    projectId?: number
+    jobId?: number
+    date?: string
+  }): Promise<{
+    buffer: Buffer
+    filename: string
+    rowCount: number
+    unitCount: number
+    totalArea: number
+    totalWeight: number
+  }> {
+    const reportDate = this.parseReportDate(filtersInput?.date)
+    const formattedDate = this.formatDisplayDate(reportDate)
+    const built = await this.buildFittingWeightList({
+      date: reportDate,
+      projectId: filtersInput?.projectId,
+      jobId: filtersInput?.jobId,
+    })
+
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = 'AME Tracker'
+    workbook.created = new Date()
+
+    const thinBorder = {
+      top: { style: 'thin' as const, color: { argb: 'FFCBD5E1' } },
+      left: { style: 'thin' as const, color: { argb: 'FFCBD5E1' } },
+      bottom: { style: 'thin' as const, color: { argb: 'FFCBD5E1' } },
+      right: { style: 'thin' as const, color: { argb: 'FFCBD5E1' } },
+    }
+
+    const ws = workbook.addWorksheet('Fitting Weight List', {
+      views: [{ showGridLines: true, state: 'frozen', ySplit: 2 }],
+    })
+
+    ws.mergeCells('A1:K1')
+    const title = ws.getCell('A1')
+    title.value = `FITTING WEIGHT LIST — Parts shipped on ${formattedDate}`
+    title.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FF1F4E78' } }
+    title.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFEBF1F5' },
+    }
+    title.alignment = { horizontal: 'center', vertical: 'middle' }
+    ws.getRow(1).height = 28
+
+    const headers = [
+      'Fitting',
+      'Project',
+      'Job',
+      'Piece #',
+      'Qty',
+      'Width',
+      'Depth',
+      'Length',
+      'Size',
+      'Area',
+      'Weight',
+    ]
+    const colCount = headers.length
+    const colMaxLen = headers.map((h) => h.length)
+    const trackWidth = (col: number, val: unknown) => {
+      const len = String(val ?? '').length
+      if (len > colMaxLen[col - 1]) colMaxLen[col - 1] = len
+    }
+    const rowHeightFor = (...vals: unknown[]) => {
+      const longest = vals.reduce<number>((max, v) => Math.max(max, String(v ?? '').length), 0)
+      if (longest > 42) return 40
+      if (longest > 28) return 32
+      if (longest > 18) return 26
+      return 20
+    }
+
+    const headerRow = ws.getRow(2)
+    headerRow.height = 24
+    headers.forEach((h, idx) => {
+      trackWidth(idx + 1, h)
+      const cell = headerRow.getCell(idx + 1)
+      cell.value = h
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } }
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1F4E78' },
+      }
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+      cell.border = thinBorder
+    })
+
+    let rowIdx = 3
+    for (const section of built.sections) {
+      const banner = ws.getRow(rowIdx++)
+      ws.mergeCells(`A${banner.number}:K${banner.number}`)
+      const bannerCell = banner.getCell(1)
+      bannerCell.value = section.fitting
+      bannerCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FF0F172A' } }
+      bannerCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFDBEAFE' },
+      }
+      bannerCell.alignment = { horizontal: 'left', vertical: 'middle' }
+      banner.height = rowHeightFor(section.fitting)
+      trackWidth(1, section.fitting)
+
+      for (const row of section.rows) {
+        const excelRow = ws.getRow(rowIdx++)
+        const values: Array<string | number> = [
+          row.fitting,
+          row.projectName,
+          row.jobName,
+          row.pieceNumber,
+          row.qty,
+          row.width ?? '',
+          row.depth ?? '',
+          row.length ?? '',
+          row.size || '',
+          Number(row.area.toFixed(4)),
+          Number(row.weight.toFixed(2)),
+        ]
+        values.forEach((val, cIdx) => {
+          trackWidth(cIdx + 1, val)
+          const cell = excelRow.getCell(cIdx + 1)
+          cell.value = val
+          cell.font = { name: 'Calibri', size: 10, color: { argb: 'FF111827' } }
+          cell.border = thinBorder
+          if (cIdx === 8) {
+            cell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true }
+          } else if (cIdx >= 4) {
+            cell.alignment = { horizontal: 'right', vertical: 'middle' }
+            if (typeof val === 'number') {
+              cell.numFmt = cIdx === 4 ? '#,##0' : cIdx === 9 ? '0.0000' : '0.00'
+            }
+          } else {
+            cell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true }
+          }
+        })
+        excelRow.height = rowHeightFor(row.projectName, row.jobName, row.size, row.fitting)
+      }
+
+      const subLabel = `Subtotal — ${section.fitting}`
+      const sub = ws.getRow(rowIdx++)
+      sub.getCell(4).value = subLabel
+      sub.getCell(4).font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF1F4E78' } }
+      sub.getCell(4).alignment = { horizontal: 'right', vertical: 'middle', wrapText: true }
+      trackWidth(4, subLabel)
+      sub.getCell(5).value = section.qty
+      sub.getCell(5).numFmt = '#,##0'
+      trackWidth(5, section.qty)
+      sub.getCell(10).value = Number(section.area.toFixed(4))
+      sub.getCell(10).numFmt = '0.0000'
+      trackWidth(10, section.area.toFixed(4))
+      sub.getCell(11).value = Number(section.weight.toFixed(2))
+      sub.getCell(11).numFmt = '0.00'
+      trackWidth(11, section.weight.toFixed(2))
+      for (const c of [5, 10, 11]) {
+        const cell = sub.getCell(c)
+        cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF1F4E78' } }
+        cell.alignment = { horizontal: 'right', vertical: 'middle' }
+      }
+      for (let c = 1; c <= colCount; c++) {
+        const cell = sub.getCell(c)
+        cell.border = thinBorder
+        if (!cell.fill) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
+        }
+      }
+      sub.height = rowHeightFor(subLabel)
+    }
+
+    const totalRow = ws.getRow(rowIdx)
+    totalRow.height = 26
+    totalRow.getCell(4).value = 'Totals'
+    totalRow.getCell(4).font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FF1F4E78' } }
+    trackWidth(4, 'Totals')
+    totalRow.getCell(5).value = built.totalQty
+    totalRow.getCell(5).numFmt = '#,##0'
+    trackWidth(5, built.totalQty)
+    totalRow.getCell(10).value = Number(built.totalArea.toFixed(4))
+    totalRow.getCell(10).numFmt = '0.0000'
+    trackWidth(10, built.totalArea.toFixed(4))
+    totalRow.getCell(11).value = Number(built.totalWeight.toFixed(2))
+    totalRow.getCell(11).numFmt = '0.00'
+    trackWidth(11, built.totalWeight.toFixed(2))
+    for (const c of [5, 10, 11]) {
+      const cell = totalRow.getCell(c)
+      cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FF1F4E78' } }
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBF1F5' } }
+      cell.alignment = { horizontal: 'right', vertical: 'middle' }
+    }
+    for (let c = 1; c <= colCount; c++) {
+      const cell = totalRow.getCell(c)
+      cell.border = thinBorder
+      if (!cell.fill) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBF1F5' } }
+      }
+    }
+
+    // Fit columns to content (capped so wide names don't blow out the sheet)
+    const minWidths = [12, 14, 14, 10, 8, 9, 9, 9, 14, 10, 10]
+    const maxWidths = [28, 42, 42, 14, 10, 12, 12, 12, 36, 14, 12]
+    colMaxLen.forEach((len, i) => {
+      const auto = Math.ceil(len * 1.12) + 2
+      ws.getColumn(i + 1).width = Math.min(
+        maxWidths[i] ?? 40,
+        Math.max(minWidths[i] ?? 8, auto),
+      )
+    })
+
+    const rawBuffer = await workbook.xlsx.writeBuffer()
+    const buffer = Buffer.from(rawBuffer)
+    const filename = `FITTING_WEIGHT_LIST_${reportDate}.xlsx`
+
+    return {
+      buffer,
+      filename,
+      rowCount: built.rowCount,
+      unitCount: built.unitCount,
+      totalArea: Number(built.totalArea.toFixed(4)),
+      totalWeight: Number(built.totalWeight.toFixed(2)),
+    }
+  }
+
+  async getFittingWeightListPreview(filtersInput?: {
+    projectId?: number
+    jobId?: number
+    date?: string
+  }) {
+    const reportDate = this.parseReportDate(filtersInput?.date)
+    const built = await this.buildFittingWeightList({
+      date: reportDate,
+      projectId: filtersInput?.projectId,
+      jobId: filtersInput?.jobId,
+    })
+
+    return {
+      filename: `FITTING_WEIGHT_LIST_${reportDate}.xlsx`,
+      date: reportDate,
+      displayDate: this.formatDisplayDate(reportDate),
+      rowCount: built.rowCount,
+      unitCount: built.unitCount,
+      totalQty: built.totalQty,
+      totalArea: Number(built.totalArea.toFixed(4)),
+      totalWeight: Number(built.totalWeight.toFixed(2)),
+      sections: built.sections.map((s) => ({
+        fitting: s.fitting,
+        qty: s.qty,
+        area: Number(s.area.toFixed(4)),
+        weight: Number(s.weight.toFixed(2)),
+        rows: s.rows.map((r) => ({
+          fitting: r.fitting,
+          projectName: r.projectName,
+          jobName: r.jobName,
+          pieceNumber: r.pieceNumber,
+          qty: r.qty,
+          width: r.width,
+          depth: r.depth,
+          length: r.length,
+          size: r.size,
+          area: Number(r.area.toFixed(4)),
+          weight: Number(r.weight.toFixed(2)),
+        })),
+      })),
+      message: built.unitCount
+        ? `${built.unitCount} parts shipped on ${this.formatDisplayDate(reportDate)} ` +
+          `across ${built.sections.length} fitting group(s), ${built.totalWeight.toFixed(2)} kg.`
+        : `No parts were shipped on ${this.formatDisplayDate(reportDate)}.`,
+    }
+  }
+
+  private async buildFittingWeightList(filters: {
+    date: string
+    projectId?: number
+    jobId?: number
+  }) {
+    const { start, end } = this.dayBounds(filters.date)
+
+    const units = await this.prisma.itemUnit.findMany({
+      where: {
+        trackingEvents: {
+          some: { status: 'SHIPPED', createdAt: { gte: start, lt: end } },
+        },
+        ...(filters.jobId ? { jobId: Number(filters.jobId) } : {}),
+        ...(filters.projectId
+          ? { job: { projectId: Number(filters.projectId) } }
+          : {}),
+      },
+      include: {
+        item: true,
+        job: { include: { project: true } },
+      },
+    })
+
+    type AggRow = {
+      fitting: string
+      projectName: string
+      jobName: string
+      pieceNumber: string
+      qty: number
+      width: number | null
+      depth: number | null
+      length: number | null
+      size: string
+      area: number
+      weight: number
+    }
+
+    const agg = new Map<string, AggRow>()
+
+    for (const unit of units) {
+      const item = unit.item
+      const fitting = (item.fitting || 'UNSPECIFIED').trim() || 'UNSPECIFIED'
+      const projectName = unit.job.project?.projectName || 'GENERAL'
+      const jobName = unit.job.jobName
+      const pieceNumber =
+        schedulePieceNbr(item.pieceNumber, item.alphaNumber) ||
+        item.alphaNumber ||
+        item.pieceNumber ||
+        String(item.sourceItemId)
+      const dims = this.parseFittingDimensions(item.dimensions, item.scheduleJson)
+      const size =
+        this.formatFittingSize(dims.width, dims.depth, dims.length) ||
+        this.formatGatePassSize(item.dimensions)
+      const unitArea = this.unitArea(item.metricArea, item.quantity)
+      const unitWt = this.unitWeight(item.metricWeight, item.quantity)
+
+      const key = `${fitting}\u0000${projectName}\u0000${jobName}\u0000${pieceNumber}`
+      const existing = agg.get(key)
+      if (existing) {
+        existing.qty += 1
+        existing.area += unitArea
+        existing.weight += unitWt
+      } else {
+        agg.set(key, {
+          fitting,
+          projectName,
+          jobName,
+          pieceNumber,
+          qty: 1,
+          width: dims.width,
+          depth: dims.depth,
+          length: dims.length,
+          size,
+          area: unitArea,
+          weight: unitWt,
+        })
+      }
+    }
+
+    const rows = Array.from(agg.values()).sort(
+      (a, b) =>
+        a.fitting.localeCompare(b.fitting) ||
+        a.projectName.localeCompare(b.projectName) ||
+        a.jobName.localeCompare(b.jobName) ||
+        a.pieceNumber.localeCompare(b.pieceNumber, undefined, { numeric: true }),
+    )
+
+    const sectionMap = new Map<
+      string,
+      { fitting: string; rows: AggRow[]; qty: number; area: number; weight: number }
+    >()
+    for (const row of rows) {
+      let section = sectionMap.get(row.fitting)
+      if (!section) {
+        section = { fitting: row.fitting, rows: [], qty: 0, area: 0, weight: 0 }
+        sectionMap.set(row.fitting, section)
+      }
+      section.rows.push(row)
+      section.qty += row.qty
+      section.area += row.area
+      section.weight += row.weight
+    }
+
+    const sections = Array.from(sectionMap.values())
+    const totalQty = sections.reduce((n, s) => n + s.qty, 0)
+    const totalArea = sections.reduce((n, s) => n + s.area, 0)
+    const totalWeight = sections.reduce((n, s) => n + s.weight, 0)
+
+    return {
+      sections,
+      rowCount: rows.length,
+      unitCount: units.length,
+      totalQty,
+      totalArea,
+      totalWeight,
+    }
+  }
+
+  private formatFittingSize(
+    width: number | null,
+    depth: number | null,
+    length: number | null,
+  ): string {
+    const parts = [width, depth, length]
+      .filter((n): n is number => n != null && Number.isFinite(n))
+      .map((n) => this.trimDim(String(n)))
+    return parts.length ? parts.join(' X ') : ''
+  }
+
+  /** Width / Depth from dimensions string; Length from schedule extras when present. */
+  private parseFittingDimensions(
+    dimensions: string | null | undefined,
+    scheduleJson: string | null | undefined,
+  ): { width: number | null; depth: number | null; length: number | null } {
+    const extras = parseScheduleExtras(scheduleJson)
+    const lengthRaw = extras['Length'] ?? extras['Lengthsame lenght 1'] ?? extras['same lenght 1']
+    const length =
+      typeof lengthRaw === 'number'
+        ? lengthRaw
+        : typeof lengthRaw === 'string' && lengthRaw.trim()
+          ? Number(String(lengthRaw).replace(/,/g, ''))
+          : null
+
+    if (!dimensions) {
+      return {
+        width: null,
+        depth: null,
+        length: Number.isFinite(length as number) ? (length as number) : null,
+      }
+    }
+
+    const primary = dimensions.split(/[;|]/)[0] || dimensions
+    const nums = primary
+      .replace(/[×xX]/g, ' ')
+      .split(/[^0-9.]+/)
+      .map((n) => n.trim())
+      .filter((n) => n && /^-?\d+(\.\d+)?$/.test(n))
+      .map(Number)
+      .filter((n) => Number.isFinite(n))
+
+    return {
+      width: nums[0] ?? null,
+      depth: nums[1] ?? null,
+      length:
+        Number.isFinite(length as number)
+          ? (length as number)
+          : nums[2] ?? null,
+    }
+  }
+
+  private unitArea(metricArea: number | null, quantity: number): number {
+    if (!metricArea) return 0
+    const qty = quantity > 0 ? quantity : 1
+    return metricArea / qty
+  }
+
   private aggregateGaugeGroups(
     units: Array<{
       item: {
@@ -700,9 +1153,7 @@ export class ReportsService {
   private async queryUnits(filters: ReportFilters) {
     let whereClause: Record<string, unknown> = {}
     if (filters.jobCode) {
-      const job = await this.prisma.job.findUnique({
-        where: { sourceJobId: filters.jobCode },
-      })
+      const job = await findJobBySourceJobId(this.prisma, filters.jobCode)
       if (job) whereClause = { ...whereClause, jobId: job.id }
     }
     if (filters.status) {
@@ -1052,14 +1503,16 @@ export class ReportsService {
     })
 
     const totalPieces = passes.reduce((n, p) => n + p.totalPieces, 0)
-    const totalWeight = passes.reduce((n, p) => n + p.actualWeight, 0)
+    const totalJobShipped = passes.reduce((n, p) => n + p.totalJobShipped, 0)
+    const totalJobParts = passes.reduce((n, p) => n + p.totalJobParts, 0)
 
     return {
       date: reportDate,
       displayDate: this.formatDisplayDate(reportDate),
       passCount: passes.length,
       totalPieces,
-      totalWeight: Number(totalWeight.toFixed(2)),
+      totalJobShipped,
+      totalJobParts,
       trolleys: Array.from(new Set(passes.map((p) => p.trolley).filter(Boolean))),
       projects: Array.from(new Set(passes.map((p) => p.projectName))),
       passes: passes.map((p) => ({
@@ -1068,14 +1521,17 @@ export class ReportsService {
         projectShortName: p.projectShortName,
         trolley: p.trolley,
         shippingDate: p.shippingDate,
-        actualWeight: Number(p.actualWeight.toFixed(2)),
         totalPieces: p.totalPieces,
+        totalJobShipped: p.totalJobShipped,
+        totalJobParts: p.totalJobParts,
         jobs: p.jobs.map((j) => {
           const parsed = this.parseJobAccount(j.jobName)
           return {
             jobName: parsed.jobName,
             account: parsed.account,
             pieceCount: j.pieces.length,
+            shippedParts: j.shippedParts,
+            totalParts: j.totalParts,
             pieces: j.pieces.map((row) => ({
               pieceNumber: row.pieceNumber,
               item: row.item,
@@ -1165,14 +1621,36 @@ export class ReportsService {
     const { start, end } = this.dayBounds(filters.date)
     const trolleyFilter = filters.trolley?.trim() || undefined
 
+    // Resolve trolley filter against both event.vehicleNumber and current Dispatch.vehicleNumber
+    // (vehicle is often entered after scans, so early SCAN events may still be blank).
+    let dispatchIdsForTrolley: number[] | undefined
+    if (trolleyFilter) {
+      const matchingDispatches = await this.prisma.dispatch.findMany({
+        where: { vehicleNumber: trolleyFilter },
+        select: { id: true },
+      })
+      dispatchIdsForTrolley = matchingDispatches.map((d) => d.id)
+    }
+
+    const shippedEventWhere = {
+      status: 'SHIPPED' as const,
+      createdAt: { gte: start, lt: end },
+      ...(trolleyFilter
+        ? {
+            OR: [
+              { vehicleNumber: trolleyFilter },
+              ...(dispatchIdsForTrolley && dispatchIdsForTrolley.length
+                ? [{ dispatchId: { in: dispatchIdsForTrolley } }]
+                : []),
+            ],
+          }
+        : {}),
+    }
+
     const units = await this.prisma.itemUnit.findMany({
       where: {
         trackingEvents: {
-          some: {
-            status: 'SHIPPED',
-            createdAt: { gte: start, lt: end },
-            ...(trolleyFilter ? { vehicleNumber: trolleyFilter } : {}),
-          },
+          some: shippedEventWhere,
         },
         ...(filters.jobId ? { jobId: Number(filters.jobId) } : {}),
         ...(filters.projectId
@@ -1183,17 +1661,45 @@ export class ReportsService {
         item: true,
         job: { include: { project: true } },
         trackingEvents: {
-          where: {
-            status: 'SHIPPED',
-            createdAt: { gte: start, lt: end },
-            ...(trolleyFilter ? { vehicleNumber: trolleyFilter } : {}),
-          },
-          orderBy: { createdAt: 'asc' },
-          take: 1,
+          where: shippedEventWhere,
+          orderBy: { createdAt: 'desc' },
         },
       },
       orderBy: [{ jobId: 'asc' }, { id: 'asc' }],
     })
+
+    // A re-scanned part belongs to its current dispatch only, so an older load
+    // never keeps a piece that actually shipped on a newer vehicle.
+    const currentDispatchByUnit = new Map<number, number>()
+    if (units.length) {
+      const links = await this.prisma.dispatchPart.findMany({
+        where: { itemUnitId: { in: units.map((u) => u.id) } },
+        orderBy: { loadedAt: 'desc' },
+        select: { itemUnitId: true, dispatchId: true },
+      })
+      for (const link of links) {
+        if (!currentDispatchByUnit.has(link.itemUnitId)) {
+          currentDispatchByUnit.set(link.itemUnitId, link.dispatchId)
+        }
+      }
+    }
+
+    const dispatchIds = new Set<number>(currentDispatchByUnit.values())
+    for (const unit of units) {
+      for (const ev of unit.trackingEvents) {
+        if (ev.dispatchId != null) dispatchIds.add(ev.dispatchId)
+      }
+    }
+    const dispatchVehicleMap = new Map<number, string | null>()
+    if (dispatchIds.size) {
+      const dispatches = await this.prisma.dispatch.findMany({
+        where: { id: { in: [...dispatchIds] } },
+        select: { id: true, vehicleNumber: true },
+      })
+      for (const d of dispatches) {
+        dispatchVehicleMap.set(d.id, d.vehicleNumber)
+      }
+    }
 
     type PieceRow = {
       pieceNumber: string
@@ -1202,13 +1708,14 @@ export class ReportsService {
       shippedAt: Date
       shippedAtDisplay: string
       trackingNo: string
-      weight: number
     }
 
     type JobBlock = {
       jobKey: string
       jobName: string
       pieces: PieceRow[]
+      shippedParts: number
+      totalParts: number
     }
 
     type GatePass = {
@@ -1217,20 +1724,49 @@ export class ReportsService {
       projectShortName: string
       trolley: string
       shippingDate: string
-      actualWeight: number
       totalPieces: number
+      totalJobShipped: number
+      totalJobParts: number
+      /** Latest ship time on this load — cutoff for cumulative job counts. */
+      shipCutoff: Date
       jobs: JobBlock[]
     }
 
     const passMap = new Map<string, GatePass>()
 
     for (const unit of units) {
-      const event = unit.trackingEvents[0]
-      if (!event) continue
+      const currentDispatchId = currentDispatchByUnit.get(unit.id)
+      // Keep only events from the dispatch this piece currently belongs to.
+      const events = currentDispatchId
+        ? unit.trackingEvents.filter((e) => e.dispatchId === currentDispatchId)
+        : unit.trackingEvents
+      if (!events.length) continue
+
+      // Prefer SHIP (completion) over earlier SCAN; otherwise latest SHIPPED event.
+      const event =
+        events.find((e) => e.eventType === 'SHIP') || events[0]
 
       const projectName = unit.job.project?.projectName || 'GENERAL'
       const projectId = unit.job.project?.id ?? null
-      const trolley = event.vehicleNumber?.trim() || '—'
+
+      // Prefer live dispatch vehicle number (updated when operator edits trolly#).
+      const dispatchIdForTrolley = currentDispatchId ?? event.dispatchId ?? null
+      const fromDispatch =
+        dispatchIdForTrolley != null
+          ? dispatchVehicleMap.get(dispatchIdForTrolley)?.trim()
+          : undefined
+      const fromEvents = events
+        .map((e) => e.vehicleNumber?.trim())
+        .find((v) => !!v)
+      const trolley =
+        fromDispatch ||
+        fromEvents ||
+        (dispatchIdForTrolley != null
+          ? `Dispatch #${String(dispatchIdForTrolley).padStart(4, '0')}`
+          : '—')
+
+      if (trolleyFilter && trolley !== trolleyFilter) continue
+
       const passKey = `${projectName}\u0000${trolley}`
 
       let pass = passMap.get(passKey)
@@ -1241,11 +1777,16 @@ export class ReportsService {
           projectShortName: this.projectShortName(projectName),
           trolley,
           shippingDate: this.formatDisplayDate(filters.date),
-          actualWeight: 0,
           totalPieces: 0,
+          totalJobShipped: 0,
+          totalJobParts: 0,
+          shipCutoff: event.createdAt,
           jobs: [],
         }
         passMap.set(passKey, pass)
+      }
+      if (event.createdAt > pass.shipCutoff) {
+        pass.shipCutoff = event.createdAt
       }
 
       const jobKey = String(unit.jobId)
@@ -1255,11 +1796,12 @@ export class ReportsService {
           jobKey,
           jobName: unit.job.jobName,
           pieces: [],
+          shippedParts: 0,
+          totalParts: 0,
         }
         pass.jobs.push(job)
       }
 
-      const weight = this.unitWeight(unit.item.metricWeight, unit.item.quantity)
       job.pieces.push({
         pieceNumber: unit.item.pieceNumber || String(unit.item.sourceItemId),
         item: unit.item.fitting || 'Item',
@@ -1269,13 +1811,15 @@ export class ReportsService {
         trackingNo: unit.sourceItemTrackingId
           ? String(unit.sourceItemTrackingId)
           : '',
-        weight,
       })
-      pass.actualWeight += weight
       pass.totalPieces += 1
     }
 
+    await this.attachJobPartCounts(passMap)
+
     for (const pass of passMap.values()) {
+      pass.totalJobShipped = pass.jobs.reduce((sum, job) => sum + job.shippedParts, 0)
+      pass.totalJobParts = pass.jobs.reduce((sum, job) => sum + job.totalParts, 0)
       pass.jobs.sort((a, b) => a.jobName.localeCompare(b.jobName))
       for (const job of pass.jobs) {
         job.pieces.sort((a, b) => {
@@ -1293,6 +1837,92 @@ export class ReportsService {
         a.projectName.localeCompare(b.projectName) ||
         a.trolley.localeCompare(b.trolley),
     )
+  }
+
+  /**
+   * Job shipped/total counts per load. Shipped is cumulative up to that load's own
+   * ship time, so an earlier vehicle shows fewer parts than a later one and past
+   * shipping lists are never rewritten by a new dispatch.
+   */
+  private async attachJobPartCounts(
+    passMap: Map<string, {
+      shipCutoff: Date
+      jobs: Array<{ jobKey: string; shippedParts: number; totalParts: number }>
+    }>,
+  ) {
+    const jobIds = new Set<number>()
+    for (const pass of passMap.values()) {
+      for (const job of pass.jobs) {
+        jobIds.add(Number(job.jobKey))
+      }
+    }
+    if (jobIds.size === 0) return
+
+    const jobIdsArr = [...jobIds]
+    const totals = await this.prisma.itemUnit.groupBy({
+      by: ['jobId'],
+      where: { jobId: { in: jobIdsArr } },
+      _count: { _all: true },
+    })
+    const totalMap = new Map(totals.map((row) => [row.jobId, row._count._all]))
+
+    const shippedEvents = await this.prisma.trackingEvent.findMany({
+      where: {
+        status: 'SHIPPED',
+        itemUnit: { jobId: { in: jobIdsArr } },
+      },
+      select: {
+        itemUnitId: true,
+        createdAt: true,
+        itemUnit: { select: { jobId: true } },
+      },
+    })
+
+    // Earliest ship time per unit, then sorted per job for cumulative lookups.
+    const firstShipByUnit = new Map<number, { jobId: number; at: Date }>()
+    for (const ev of shippedEvents) {
+      const existing = firstShipByUnit.get(ev.itemUnitId)
+      if (!existing || ev.createdAt < existing.at) {
+        firstShipByUnit.set(ev.itemUnitId, {
+          jobId: ev.itemUnit.jobId,
+          at: ev.createdAt,
+        })
+      }
+    }
+
+    const shipTimesByJob = new Map<number, number[]>()
+    for (const { jobId, at } of firstShipByUnit.values()) {
+      const list = shipTimesByJob.get(jobId)
+      if (list) list.push(at.getTime())
+      else shipTimesByJob.set(jobId, [at.getTime()])
+    }
+    for (const list of shipTimesByJob.values()) {
+      list.sort((a, b) => a - b)
+    }
+
+    for (const pass of passMap.values()) {
+      const cutoff = pass.shipCutoff.getTime()
+      for (const job of pass.jobs) {
+        const jobId = Number(job.jobKey)
+        job.totalParts = totalMap.get(jobId) ?? 0
+        job.shippedParts = this.countAtOrBefore(
+          shipTimesByJob.get(jobId) ?? [],
+          cutoff,
+        )
+      }
+    }
+  }
+
+  /** Number of entries in a sorted timestamp list that are <= cutoff. */
+  private countAtOrBefore(sorted: number[], cutoff: number): number {
+    let low = 0
+    let high = sorted.length
+    while (low < high) {
+      const mid = (low + high) >>> 1
+      if (sorted[mid] <= cutoff) low = mid + 1
+      else high = mid
+    }
+    return low
   }
 
   private projectShortName(projectName: string): string {
@@ -1375,10 +2005,13 @@ export class ReportsService {
       projectShortName: string
       trolley: string
       shippingDate: string
-      actualWeight: number
       totalPieces: number
+      totalJobShipped: number
+      totalJobParts: number
       jobs: Array<{
         jobName: string
+        shippedParts: number
+        totalParts: number
         pieces: Array<{
           pieceNumber: string
           item: string
@@ -1471,24 +2104,38 @@ export class ReportsService {
         textAt(pass.projectName || '-', 286, 96, { width: 250 })
 
         doc.font('Helvetica').fontSize(12)
-        textAt('ACTUAL WEIGHT DISPATCHED', 14, 121)
-        doc.font('Helvetica').fontSize(13)
-        textAt(
-          pass.actualWeight > 0 ? pass.actualWeight.toFixed(2) : '-',
-          231,
-          120,
-        )
-
-        doc.font('Helvetica').fontSize(12)
         textAt('Trolly#', 377, 119)
         doc.font('Helvetica-Bold').fontSize(11)
         textAt(pass.trolley || '-', 500, 120, { width: 80, align: 'right' })
 
-        doc.y = 148
+        let yCursor = 145
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(black)
+        textAt('Job shipping progress', 14, yCursor)
+        yCursor += 16
+
+        doc.font('Helvetica').fontSize(10)
+        for (const job of pass.jobs) {
+          const parsed = this.parseJobAccount(job.jobName)
+          const sentence =
+            job.totalParts > 0
+              ? `For ${parsed.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped out of ${job.totalParts} total.`
+              : `For ${parsed.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped.`
+          doc.text(sentence, 14, yCursor, {
+            width: right - left,
+            align: 'left',
+            lineBreak: true,
+          })
+          yCursor = doc.y + 4
+        }
+
+        doc.y = Math.max(yCursor + 8, 148)
       }
 
-      const drawJobBanner = (pass: (typeof passes)[0], jobNameRaw: string) => {
-        const parsed = this.parseJobAccount(jobNameRaw)
+      const drawJobBanner = (
+        pass: (typeof passes)[0],
+        job: (typeof passes)[0]['jobs'][0],
+      ) => {
+        const parsed = this.parseJobAccount(job.jobName)
         doc.font('Helvetica-Bold').fontSize(11).fillColor(black)
         textAt(pass.projectShortName, left, doc.y, {
           width: right - left,
@@ -1503,6 +2150,18 @@ export class ReportsService {
         textAt('ACCOUNT', 355, y)
         textAt(parsed.account || '-', 450, y, { width: 120 })
         doc.y = y + 22
+
+        const sentence =
+          job.totalParts > 0
+            ? `For ${parsed.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped out of ${job.totalParts} total.`
+            : `For ${parsed.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped.`
+        doc.font('Helvetica').fontSize(10).fillColor(black)
+        doc.text(sentence, left, doc.y, {
+          width: right - left,
+          align: 'left',
+          lineBreak: true,
+        })
+        doc.y += 8
 
         const hy = doc.y
         doc.font('Helvetica').fontSize(11)
@@ -1534,12 +2193,24 @@ export class ReportsService {
         doc.y = y + rowH
       }
 
-      const drawPieceCount = (count: number) => {
+      const drawPieceCount = (
+        jobNameRaw: string,
+        shippedParts: number,
+        totalParts: number,
+        pieceCount: number,
+      ) => {
+        const parsed = this.parseJobAccount(jobNameRaw)
         const y = doc.y + 4
-        doc.font('Helvetica').fontSize(12).fillColor(black)
-        textAt('No. of Piece', 442, y)
-        doc.font('Helvetica').fontSize(9)
-        textAt(String(count), 560, y + 2, { width: 22, align: 'right' })
+        const summary =
+          totalParts > 0
+            ? `${shippedParts} of ${totalParts} parts shipped for ${parsed.jobName}`
+            : `${pieceCount} pieces on this list for ${parsed.jobName}`
+        doc.font('Helvetica').fontSize(10).fillColor(black)
+        doc.text(summary, left, y, {
+          width: right - left,
+          align: 'right',
+          lineBreak: false,
+        })
         doc.y = y + 22
       }
 
@@ -1568,8 +2239,8 @@ export class ReportsService {
           drawDocumentHeader(pass)
 
           for (const job of pass.jobs) {
-            ensureSpace(70)
-            drawJobBanner(pass, job.jobName)
+            ensureSpace(90)
+            drawJobBanner(pass, job)
 
             for (const row of job.pieces) {
               if (ensureSpace(rowH + 2)) {
@@ -1579,15 +2250,21 @@ export class ReportsService {
             }
 
             ensureSpace(28)
-            drawPieceCount(job.pieces.length)
+            drawPieceCount(job.jobName, job.shippedParts, job.totalParts, job.pieces.length)
           }
 
           ensureSpace(28)
           const ty = doc.y + 8
-          doc.font('Helvetica').fontSize(12).fillColor(black)
-          textAt('Total no. of Piece', 386, ty)
-          doc.font('Helvetica').fontSize(9)
-          textAt(String(pass.totalPieces), 548, ty + 4, { width: 34, align: 'right' })
+          const totalSummary =
+            pass.totalJobParts > 0
+              ? `${pass.totalJobShipped} of ${pass.totalJobParts} parts shipped across all jobs`
+              : `${pass.totalPieces} pieces on this list`
+          doc.font('Helvetica').fontSize(11).fillColor(black)
+          doc.text(totalSummary, left, ty, {
+            width: right - left,
+            align: 'right',
+            lineBreak: false,
+          })
           doc.y = ty + 20
         })
       }

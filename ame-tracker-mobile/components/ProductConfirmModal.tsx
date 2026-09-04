@@ -54,8 +54,7 @@ export function ProductConfirmModal({
             <View style={styles.details}>
               <Detail label="Piece #" value={`#${product.pieceNumber}`} />
               <Detail label="Fitting" value={product.fitting || '—'} />
-              <Detail label="Job #" value={product.job} />
-              <Detail label="Client" value={product.client} />
+              <Detail label="Job" value={product.jobName || product.job} />
               <Detail label="Project" value={product.project} />
               <Detail label="Status" value={product.status} />
               {product.description ? (

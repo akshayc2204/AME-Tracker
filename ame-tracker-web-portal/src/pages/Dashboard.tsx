@@ -8,7 +8,9 @@ import {
   Calendar, ChevronDown, X, FolderSync,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { useApp } from '../store/AppContext';
 import { getSocket, type DashboardScanEvent, type DashboardKpiEvent, type DashboardDispatchCompleteEvent } from '../services/socket';
+import { isStatusChangeLocked, statusLockMessage } from '../utils/statusLock';
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 function toISODate(d: Date) {
@@ -62,6 +64,15 @@ const PRESETS: Preset[] = [
   { id: 'specific', label: 'Specific Date' },
 ];
 
+function parseLocalDateInput(value: string): Date {
+  // YYYY-MM-DD from <input type="date"> must be local calendar day, not UTC midnight.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return new Date(value);
+}
+
 function computeRange(preset: PresetId, customFrom: string, customTo: string, specificDate: string): { from: Date; to: Date } {
   const now = new Date();
   const today = startOfDay(now);
@@ -82,15 +93,22 @@ function computeRange(preset: PresetId, customFrom: string, customTo: string, sp
     case '1y':
       return { from: startOfDay(subtractMonths(now, 12)), to: endOfDay(now) };
     case 'custom': {
-      const f = customFrom ? new Date(customFrom) : subtractDays(today, 30);
-      const t = customTo ? new Date(customTo) : now;
+      const f = customFrom ? parseLocalDateInput(customFrom) : subtractDays(today, 30);
+      const t = customTo ? parseLocalDateInput(customTo) : now;
       return { from: startOfDay(f), to: endOfDay(t) };
     }
     case 'specific': {
-      const d = specificDate ? new Date(specificDate) : today;
+      const d = specificDate ? parseLocalDateInput(specificDate) : today;
       return { from: startOfDay(d), to: endOfDay(d) };
     }
   }
+}
+
+function eventInRange(timestamp: string | Date | undefined, from: Date, to: Date): boolean {
+  if (!timestamp) return false;
+  const t = new Date(timestamp).getTime();
+  if (!Number.isFinite(t)) return false;
+  return t >= from.getTime() && t <= to.getTime();
 }
 
 function rangeLabel(preset: PresetId, from: Date, to: Date) {
@@ -164,6 +182,7 @@ function formatFullDate(iso: string) {
 
 interface TrackingFeedItem {
   id: number | string;
+  unitId?: number;
   pieceNo: number | string;
   fitting: string;
   itemTracking: string;
@@ -177,13 +196,25 @@ interface TrackingFeedItem {
   source: string;
   userName: string;
   timestamp: string;
+  statusLocked?: boolean;
 }
 
-function isActualScan(ev: Pick<TrackingFeedItem, 'eventType' | 'source'>) {
+function isLiveTrackingStatus(status: string) {
+  const s = String(status || '').toUpperCase();
+  return s === 'SHIPPED' || s === 'LOADED';
+}
+
+function isActualScan(ev: Pick<TrackingFeedItem, 'eventType' | 'source' | 'status'>) {
   const type = String(ev.eventType || '').toUpperCase();
   const source = String(ev.source || '').toLowerCase();
-  if (type === 'SCAN') return true;
-  return source.includes('portal');
+  // Mobile load/complete writes eventType SHIP; portal writes SCAN/SHIP.
+  if (type === 'SCAN' || type === 'SHIP' || type === 'UPDATE') return true;
+  return (
+    source.includes('portal') ||
+    source.includes('mobile') ||
+    source === 'dashboard' ||
+    source === 'projects'
+  );
 }
 
 function jobLiveStatus(job: {
@@ -515,6 +546,8 @@ function DateFilterBar({
 // ─── Main Dashboard Component ─────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { currentUser } = useApp();
+  const isAdmin = String(currentUser.role || '').toUpperCase() === 'ADMIN';
 
   // Date filter state
   const [activePreset, setActivePreset] = useState<PresetId>('today');
@@ -543,6 +576,7 @@ export default function Dashboard() {
   const [isLive, setIsLive] = useState(false);
   const [socketToast, setSocketToast] = useState<{ message: string; type: 'scan' | 'complete' } | null>(null);
   const [newScanIds, setNewScanIds] = useState<Set<string | number>>(new Set());
+  const [statusUpdatingUnitId, setStatusUpdatingUnitId] = useState<number | null>(null);
 
   // ── Folder sync (DataUploads .t4vjob + .xlsx pairs) ─────────────────────
   const [folderModalOpen, setFolderModalOpen] = useState(false);
@@ -577,6 +611,66 @@ export default function Dashboard() {
     }
   }
 
+  async function handleItemStatusChange(unitId: number, newStatus: string) {
+    if (!unitId) return;
+    const priorEvent = liveEvents.find((ev) => ev.unitId === unitId);
+    const wasShipped = isLiveTrackingStatus(priorEvent?.status || '');
+    const willShip = newStatus === 'SHIPPED';
+    setStatusUpdatingUnitId(unitId);
+    try {
+      await api.updateProductStatus(unitId, {
+        status: newStatus,
+        source: 'Dashboard',
+        reason: `Status set to ${newStatus} from dashboard`,
+      });
+
+      if (!willShip) {
+        setLiveEvents((prev) => prev.filter((ev) => ev.unitId !== unitId));
+      } else if (priorEvent) {
+        setLiveEvents((prev) => {
+          const idx = prev.findIndex((ev) => ev.unitId === unitId);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          next[idx] = { ...next[idx], status: newStatus };
+          return next;
+        });
+      }
+
+      if (wasShipped !== willShip) {
+        setLiveKpi((prev: Record<string, unknown> | null) => {
+          if (!prev) return prev;
+          const shipped = Number(prev.shipped ?? prev.loaded ?? 0);
+          const pending = Number(prev.pending ?? prev.packed ?? 0);
+          const rangeLoaded = Number(prev.rangeLoaded ?? prev.todaysLoaded ?? 0);
+          if (willShip) {
+            return {
+              ...prev,
+              shipped: shipped + 1,
+              loaded: shipped + 1,
+              pending: Math.max(0, pending - 1),
+              rangeLoaded: rangeLoaded + 1,
+              todaysLoaded: rangeLoaded + 1,
+            };
+          }
+          return {
+            ...prev,
+            shipped: Math.max(0, shipped - 1),
+            loaded: Math.max(0, shipped - 1),
+            pending: pending + 1,
+            rangeLoaded: Math.max(0, rangeLoaded - 1),
+            todaysLoaded: Math.max(0, rangeLoaded - 1),
+          };
+        });
+      }
+
+      await loadDashboard(filterRef.current.from, filterRef.current.to);
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Could not update item status');
+    } finally {
+      setStatusUpdatingUnitId(null);
+    }
+  }
+
   function closeFolderModal() {
     if (folderSyncing) return;
     setFolderModalOpen(false);
@@ -587,15 +681,30 @@ export default function Dashboard() {
     setLoading(true);
     try {
       const [dashData, jobsData] = await Promise.all([
-        api.getDashboard({ from: from.toISOString(), to: to.toISOString() }).catch(() => null),
+        api.getDashboard({ from: toISODate(from), to: toISODate(to) }).catch(() => null),
         api.getJobs().catch(() => null),
       ]);
+
+      // Ignore stale responses if the user already changed the date filter.
+      const latest = filterRef.current;
+      if (toISODate(from) !== toISODate(latest.from) || toISODate(to) !== toISODate(latest.to)) {
+        return;
+      }
 
       if (dashData?.kpi) setLiveKpi(dashData.kpi);
       if (jobsData && Array.isArray(jobsData)) setLiveJobs(jobsData);
 
       if (dashData?.recentEvents && Array.isArray(dashData.recentEvents)) {
-        setLiveEvents(dashData.recentEvents.filter(isActualScan));
+        setLiveEvents(
+          dashData.recentEvents
+            .filter(isActualScan)
+            .filter((ev) => isLiveTrackingStatus(ev.status))
+            .filter((ev) => eventInRange(ev.timestamp, from, to))
+            .map((ev: TrackingFeedItem & { unitId?: number }) => ({
+              ...ev,
+              unitId: ev.unitId != null ? Number(ev.unitId) : undefined,
+            })),
+        );
       } else {
         setLiveEvents([]);
       }
@@ -609,6 +718,16 @@ export default function Dashboard() {
   // Keep a stable ref to the latest from/to so the interval picks them up
   const filterRef = useRef({ from: filterFrom, to: filterTo });
   filterRef.current = { from: filterFrom, to: filterTo };
+  const loadDashboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function scheduleDashboardRefresh() {
+    if (loadDashboardTimerRef.current) {
+      clearTimeout(loadDashboardTimerRef.current);
+    }
+    loadDashboardTimerRef.current = setTimeout(() => {
+      loadDashboard(filterRef.current.from, filterRef.current.to);
+    }, 150);
+  }
 
   // ── Socket.IO: connect once, wire live events ────────────────────────────
   useEffect(() => {
@@ -620,6 +739,7 @@ export default function Dashboard() {
     const onScan = (ev: DashboardScanEvent) => {
       const feedItem: TrackingFeedItem = {
         id: `ws-${ev.partId}-${ev.timestamp}`,
+        unitId: ev.partId,
         pieceNo: ev.pieceNo,
         fitting: ev.fitting,
         itemTracking: ev.itemTracking || '',
@@ -629,32 +749,61 @@ export default function Dashboard() {
         jobCode: ev.jobCode,
         vehicleNumber: ev.vehicleNumber,
         status: ev.status,
-        eventType: 'SCAN',
+        eventType: ev.status === 'SHIPPED' ? 'SCAN' : 'UPDATE',
         source: ev.source,
         userName: ev.userName,
         timestamp: ev.timestamp,
       };
+      const { from, to } = filterRef.current;
+      const inSelectedRange = eventInRange(ev.timestamp, from, to);
+
       setLiveEvents(prev => {
+        if (!isLiveTrackingStatus(ev.status)) {
+          return prev.filter((existing) => existing.unitId !== ev.partId);
+        }
+        // Live socket rows only belong in the table when they match the date filter.
+        if (!inSelectedRange) {
+          return prev.filter((existing) => existing.unitId !== ev.partId);
+        }
+        const byUnit = prev.findIndex((existing) => existing.unitId === ev.partId);
+        if (byUnit >= 0) {
+          const next = [...prev];
+          next[byUnit] = { ...next[byUnit], ...feedItem, id: next[byUnit].id };
+          return next;
+        }
         const alreadyListed = prev.some(existing => isSameScan(existing, feedItem));
         if (alreadyListed) return prev;
         return [feedItem, ...prev].slice(0, 200);
       });
-      setNewScanIds(prev => new Set([...prev, feedItem.id]));
-      // Clear highlight after 3 s
-      setTimeout(() => setNewScanIds(prev => { const s = new Set(prev); s.delete(feedItem.id); return s; }), 3000);
-      setSocketToast({ message: `Piece #${ev.pieceNo} scanned — ${ev.vehicleNumber}`, type: 'scan' });
+      if (inSelectedRange) {
+        setNewScanIds(prev => new Set([...prev, feedItem.id]));
+        setTimeout(() => setNewScanIds(prev => { const s = new Set(prev); s.delete(feedItem.id); return s; }), 3000);
+      }
+      const isPortalStatus =
+        String(ev.source || '').toLowerCase() === 'dashboard' ||
+        String(ev.source || '').toLowerCase() === 'projects' ||
+        String(ev.source || '').toLowerCase().includes('portal');
+      setSocketToast({
+        message: isPortalStatus
+          ? `Piece #${ev.pieceNo} — ${ev.status}`
+          : `Piece #${ev.pieceNo} scanned — ${ev.vehicleNumber}`,
+        type: 'scan',
+      });
       setTimeout(() => setSocketToast(null), 4000);
+      scheduleDashboardRefresh();
     };
 
     const onKpi = (ev: DashboardKpiEvent) => {
-      setLiveKpi((prev: any) => prev ? { ...prev, ...ev } : ev);
+      if (ev.shipped != null || ev.pending != null || ev.totalProducts != null) {
+        setLiveKpi((prev: Record<string, unknown> | null) => (prev ? { ...prev, ...ev } : ev));
+      }
+      scheduleDashboardRefresh();
     };
 
     const onDispatchComplete = (ev: DashboardDispatchCompleteEvent) => {
       setSocketToast({ message: `✓ Dispatch ${ev.vehicleNumber} completed — ${ev.productsLoaded} parts loaded`, type: 'complete' });
       setTimeout(() => setSocketToast(null), 5000);
-      // Trigger a full dashboard refresh to get up-to-date KPIs
-      loadDashboard(filterRef.current.from, filterRef.current.to);
+      scheduleDashboardRefresh();
     };
 
     sock.on('connect', onConnect);
@@ -677,6 +826,8 @@ export default function Dashboard() {
   // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // Clear stale rows immediately so the table matches the new date while loading.
+    setLiveEvents([]);
     loadDashboard(filterFrom, filterTo);
     // Fallback HTTP poll — 30 s when live socket is connected, 6 s when offline
     const interval = setInterval(() => {
@@ -754,9 +905,12 @@ export default function Dashboard() {
     },
   ];
 
-  // Filtered live events
+  // Filtered live events — always scoped to the selected dashboard date range
   const filteredEvents = useMemo(() => {
     return liveEvents.filter(ev => {
+      if (!isLiveTrackingStatus(ev.status)) return false;
+      if (!eventInRange(ev.timestamp, filterFrom, filterTo)) return false;
+
       const src = (ev.source ?? '').toLowerCase();
       if (eventSourceFilter === 'MOBILE' && !src.includes('mobile')) return false;
       if (eventSourceFilter === 'PORTAL' && !src.includes('portal')) return false;
@@ -775,7 +929,7 @@ export default function Dashboard() {
       }
       return true;
     });
-  }, [liveEvents, eventSourceFilter, eventSearch]);
+  }, [liveEvents, eventSourceFilter, eventSearch, filterFrom, filterTo]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -993,6 +1147,7 @@ export default function Dashboard() {
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase' }}>PROJECT &amp; JOB</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 120 }}>VEHICLE NO</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 130 }}>TRACKING / ID</th>
+                <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 110 }}>STATUS</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 120 }}>SCAN METHOD</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 110 }}>OPERATOR</th>
                 <th style={{ padding: '9px 14px', fontSize: '0.7rem', fontWeight: 800, color: '#4B5563', textTransform: 'uppercase', width: 110, textAlign: 'right' }}>TIMESTAMP</th>
@@ -1001,7 +1156,7 @@ export default function Dashboard() {
             <tbody>
               {filteredEvents.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ padding: '40px 16px', textAlign: 'center', color: '#6B7280' }}>
+                  <td colSpan={9} style={{ padding: '40px 16px', textAlign: 'center', color: '#6B7280' }}>
                     <Activity size={32} style={{ margin: '0 auto 8px', opacity: 0.3 }} />
                     <div style={{ fontWeight: 600, fontSize: 14, color: '#374151' }}>No tracking events in this period</div>
                     <div style={{ fontSize: 12, marginTop: 3 }}>Try a different date range or scan parts from the mobile app.</div>
@@ -1035,9 +1190,11 @@ export default function Dashboard() {
                           </span>
                           <div>
                             <div style={{ fontWeight: 700, color: '#111827', fontSize: '0.8125rem' }}>{ev.fitting}</div>
-                            <span className={`badge ${evStatus.className}`} style={{ fontSize: '0.68rem', padding: '1px 8px', marginTop: 2 }}>
-                              {evStatus.label}
-                            </span>
+                            {!isAdmin && (
+                              <span className={`badge ${evStatus.className}`} style={{ fontSize: '0.68rem', padding: '1px 8px', marginTop: 2 }}>
+                                {evStatus.label}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1074,6 +1231,50 @@ export default function Dashboard() {
                         <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0F172A', fontSize: '0.78rem' }}>{ev.itemTracking}</div>
                         {ev.itemId && ev.itemId !== '—' && (
                           <div style={{ fontSize: '0.68rem', color: '#6B7280' }}>ID: {ev.itemId}</div>
+                        )}
+                      </td>
+
+                      {/* Status (admin can edit) */}
+                      <td style={{ padding: '10px 14px' }}>
+                        {isAdmin && ev.unitId ? (
+                          isLiveTrackingStatus(ev.status) ? (
+                            ev.statusLocked || isStatusChangeLocked(ev.timestamp) ? (
+                              <span
+                                className={`badge ${evStatus.className}`}
+                                style={{ fontSize: '0.68rem' }}
+                                title={statusLockMessage()}
+                              >
+                                {evStatus.label}
+                              </span>
+                            ) : (
+                              <select
+                                className="form-select"
+                                value="SHIPPED"
+                                disabled={statusUpdatingUnitId === ev.unitId}
+                                onChange={(e) => {
+                                  if (e.target.value === 'PENDING') {
+                                    handleItemStatusChange(ev.unitId!, 'PENDING');
+                                  }
+                                }}
+                                style={{ fontSize: '0.72rem', padding: '4px 8px', minWidth: 96, fontWeight: 700 }}
+                              >
+                                <option value="SHIPPED">Shipped</option>
+                                <option value="PENDING">Active</option>
+                              </select>
+                            )
+                          ) : (
+                            <span
+                              className={`badge ${trackingStatusTone(ev.status).className}`}
+                              style={{ fontSize: '0.68rem' }}
+                              title="Scan on mobile to mark as shipped"
+                            >
+                              {trackingStatusTone(ev.status).label}
+                            </span>
+                          )
+                        ) : (
+                          <span className={`badge ${evStatus.className}`} style={{ fontSize: '0.68rem' }}>
+                            {evStatus.label}
+                          </span>
                         )}
                       </td>
 
@@ -1151,8 +1352,13 @@ export default function Dashboard() {
                     className="hover:bg-slate-50"
                   >
                     <td style={{ padding: '10px 14px' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 13.5 }}>{job.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Job #{job.code}</div>
+                      <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 13.5 }}>
+                        {job.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <span className="chip" style={{ fontSize: 10 }}>Job #{job.code}</span>
+                        <span className="chip" style={{ fontSize: 10 }}>Upload v{job.importVersion ?? 1}</span>
+                      </div>
                     </td>
                     <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
                       {job.project?.name || 'General Project'}

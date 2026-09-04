@@ -124,18 +124,22 @@ async function main() {
     },
   })
 
-  const job = await prisma.job.upsert({
+  const existingJob = await prisma.job.findUnique({
     where: { sourceJobId: '70037' },
-    update: {},
-    create: {
-      projectId: project.id,
-      sourceJobId: '70037',
-      jobName: 'P47184 - STG GF FO 1',
-      labelColor: '35',
-      isActive: 1,
-      sourceFile: 'seed',
-    },
   })
+  const job = existingJob
+    ? existingJob
+    : await prisma.job.create({
+        data: {
+          projectId: project.id,
+          sourceJobId: '70037',
+          jobName: 'P47184 - STG GF FO 1',
+          labelColor: '35',
+          isActive: 1,
+          importVersion: 1,
+          sourceFile: 'seed',
+        },
+      })
 
   for (const sample of sampleUnits) {
     const item = await prisma.item.upsert({

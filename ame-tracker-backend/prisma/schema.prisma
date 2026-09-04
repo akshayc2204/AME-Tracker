@@ -45,16 +45,18 @@ model Project {
 }
 
 model Job {
-  id          Int      @id @default(autoincrement())
-  projectId   Int?     @map("project_id")
-  sourceJobId String   @unique @map("source_job_id")
-  jobName     String   @map("job_name")
-  labelColor  String?  @map("label_color")
-  isActive    Int      @default(1) @map("is_active")
-  isCompleted Int?     @map("is_completed")
-  sourceFile  String?  @map("source_file")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  id            Int      @id @default(autoincrement())
+  projectId     Int?     @map("project_id")
+  sourceJobId   String   @unique @map("source_job_id")
+  jobName       String   @map("job_name")
+  labelColor    String?  @map("label_color")
+  isActive      Int      @default(1) @map("is_active")
+  isCompleted   Int?     @map("is_completed")
+  sourceFile    String?  @map("source_file")
+  /// Display-only label on Dashboard after re-import (v1, v2, …). Not used in import matching.
+  importVersion Int      @default(1) @map("import_version")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 
   project       Project?      @relation(fields: [projectId], references: [id])
   items         Item[]
@@ -62,9 +64,24 @@ model Job {
   dispatches    Dispatch[]
   importBatches ImportBatch[]
 
-  @@index([sourceJobId], map: "idx_jobs_source_job_id")
   @@index([projectId], map: "idx_jobs_project")
   @@map("jobs")
+}
+
+/// Lightweight history when a user deletes a job — parts data is removed; only totals kept.
+model JobArchive {
+  id            Int      @id @default(autoincrement())
+  projectId     Int?     @map("project_id")
+  projectName   String?  @map("project_name")
+  sourceJobId   String   @map("source_job_id")
+  jobName       String   @map("job_name")
+  importVersion Int      @map("import_version")
+  totalParts    Int      @default(0) @map("total_parts")
+  archivedAt    DateTime @default(now()) @map("archived_at")
+
+  @@index([sourceJobId], map: "idx_job_archives_source")
+  @@index([archivedAt], map: "idx_job_archives_date")
+  @@map("job_archives")
 }
 
 /// Trimble Items row — gauge-report grain (Project → Job → Metal aggregates here).

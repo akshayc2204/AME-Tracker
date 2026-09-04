@@ -87,6 +87,9 @@ function PartRow({ part, showProject }: { part: FlatPart; showProject?: boolean 
       <View style={{ flex: 1, marginLeft: 10 }}>
         <Text style={styles.partFittingText} numberOfLines={1}>{part.fitting || 'Standard Duct'}</Text>
         <View style={{ flexDirection: 'row', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+          {part.jobName ? (
+            <Text style={styles.partJobTag} numberOfLines={1}>{part.jobName}</Text>
+          ) : null}
           {showProject && (
             <Text style={styles.partProjectTag} numberOfLines={1}>{part.projectName}</Text>
           )}
@@ -869,6 +872,7 @@ const styles = StyleSheet.create({
   partPieceCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#A7F3D0', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   partPieceNumber: { fontSize: 12, fontWeight: '800', color: '#047857' },
   partFittingText: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  partJobTag: { fontSize: 10, fontWeight: '700', color: '#7C3AED', backgroundColor: '#F5F3FF', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, maxWidth: 180 },
   partProjectTag: { fontSize: 10, fontWeight: '700', color: '#1D4ED8', backgroundColor: '#EFF6FF', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
   partTrackingText: { fontSize: 10, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontWeight: '700', color: '#1E293B', backgroundColor: '#E2E8F0', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
   partStatusChip: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#A7F3D0', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },

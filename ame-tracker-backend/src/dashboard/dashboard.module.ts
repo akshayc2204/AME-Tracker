@@ -6,6 +6,6 @@ import { DashboardGateway } from './dashboard.gateway'
 @Module({
   controllers: [DashboardController],
   providers: [DashboardService, DashboardGateway],
-  exports: [DashboardGateway],
+  exports: [DashboardGateway, DashboardService],
 })
 export class DashboardModule {}

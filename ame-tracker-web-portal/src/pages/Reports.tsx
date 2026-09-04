@@ -248,7 +248,10 @@ export default function Reports() {
     const sock = getSocket();
 
     const onScan = (ev: DashboardScanEvent) => {
-      const isPortal = String(ev.source || '').toUpperCase().includes('PORTAL');
+      const isPortal =
+        String(ev.source || '').toUpperCase().includes('PORTAL') ||
+        String(ev.source || '').toUpperCase() === 'DASHBOARD' ||
+        String(ev.source || '').toUpperCase() === 'PROJECTS';
       const trackEvent = isPortal ? 'Portal scan' : 'Mobile scan';
       const scanDate = ev.timestamp ? new Date(ev.timestamp) : new Date();
       const day = String(scanDate.getDate()).padStart(2, '0');
@@ -259,6 +262,7 @@ export default function Reports() {
         day: '2-digit', month: '2-digit', year: 'numeric',
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
       });
+      const normalizedStatus = String(ev.status || 'SHIPPED').toUpperCase();
 
       const partKey = String(ev.partId);
 
@@ -273,11 +277,14 @@ export default function Reports() {
           fitting: ev.fitting || (existingIdx >= 0 ? prev[existingIdx].fitting : 'Standard Duct'),
           itemId: ev.itemId || (existingIdx >= 0 ? prev[existingIdx].itemId : '—'),
           itemTracking: ev.itemTracking || (existingIdx >= 0 ? prev[existingIdx].itemTracking : '—'),
-          status: 'SHIPPED',
-          shippedAt: ev.timestamp,
-          shippedTimestampFormatted: formattedTimestamp,
-          dispatchDate: dateDisplay,
-          vehicleNumber: ev.vehicleNumber || (existingIdx >= 0 ? prev[existingIdx].vehicleNumber : '18/97591'),
+          status: normalizedStatus,
+          shippedAt: normalizedStatus === 'SHIPPED' ? ev.timestamp : null,
+          shippedTimestampFormatted:
+            normalizedStatus === 'SHIPPED' ? formattedTimestamp : '—',
+          dispatchDate: normalizedStatus === 'SHIPPED' ? dateDisplay : '—',
+          vehicleNumber:
+            ev.vehicleNumber ||
+            (existingIdx >= 0 ? prev[existingIdx].vehicleNumber : 'Pending Loading'),
           vehiclePhotoUrl: existingIdx >= 0 ? prev[existingIdx].vehiclePhotoUrl : null,
           trackEvent,
           jobName: ev.jobName || (existingIdx >= 0 ? prev[existingIdx].jobName : `Job #${ev.jobCode}`),
@@ -299,11 +306,17 @@ export default function Reports() {
       loadData();
     };
 
+    const onKpi = () => {
+      loadData();
+    };
+
     sock.on('dashboard:scan', onScan);
+    sock.on('dashboard:kpi', onKpi);
     sock.on('dashboard:dispatch_complete', onDispatchComplete);
 
     return () => {
       sock.off('dashboard:scan', onScan);
+      sock.off('dashboard:kpi', onKpi);
       sock.off('dashboard:dispatch_complete', onDispatchComplete);
     };
   }, []);
@@ -514,6 +527,42 @@ export default function Reports() {
     projectSummary: Array<{ projectName: string; totalWeight: number }>;
   } | null>(null);
 
+  // Fitting Weight List (end-of-day shipped parts) preview + download
+  const [fwlOpen, setFwlOpen] = useState(false);
+  const [fwlLoading, setFwlLoading] = useState(false);
+  const [fwlDownloading, setFwlDownloading] = useState(false);
+  const [fwlDate, setFwlDate] = useState(() => localIsoDate());
+  const [fwlPreview, setFwlPreview] = useState<{
+    filename: string;
+    date: string;
+    displayDate: string;
+    rowCount: number;
+    unitCount: number;
+    totalQty: number;
+    totalArea: number;
+    totalWeight: number;
+    message: string;
+    sections: Array<{
+      fitting: string;
+      qty: number;
+      area: number;
+      weight: number;
+      rows: Array<{
+        fitting: string;
+        projectName: string;
+        jobName: string;
+        pieceNumber: string;
+        qty: number;
+        width: number | null;
+        depth: number | null;
+        length: number | null;
+        size: string;
+        area: number;
+        weight: number;
+      }>;
+    }>;
+  } | null>(null);
+
   // Shipping List preview + download
   const [gatePassOpen, setGatePassOpen] = useState(false);
   const [gatePassLoading, setGatePassLoading] = useState(false);
@@ -526,7 +575,8 @@ export default function Reports() {
     displayDate: string;
     passCount: number;
     totalPieces: number;
-    totalWeight: number;
+    totalJobShipped: number;
+    totalJobParts: number;
     trolleys: string[];
     projects: string[];
     message: string;
@@ -536,12 +586,15 @@ export default function Reports() {
       projectShortName: string;
       trolley: string;
       shippingDate: string;
-      actualWeight: number;
       totalPieces: number;
+      totalJobShipped: number;
+      totalJobParts: number;
       jobs: Array<{
         jobName: string;
         account?: string;
         pieceCount: number;
+        shippedParts: number;
+        totalParts: number;
         pieces: Array<{
           pieceNumber: string;
           item: string;
@@ -552,12 +605,21 @@ export default function Reports() {
       }>;
     }>;
   } | null>(null);
+  /** Full trolley list for the selected date (not narrowed by active trolley filter). */
+  const [gatePassTrolleyOptions, setGatePassTrolleyOptions] = useState<string[]>([]);
 
   const gatePassProjectOptions = useMemo(() => {
     const names = new Set<string>(availableProjects);
     gatePassPreview?.projects?.forEach((p) => names.add(p));
     return Array.from(names).sort();
   }, [availableProjects, gatePassPreview?.projects]);
+
+  /** Trolleys that actually shipped on the selected date — never the all-time list. */
+  const shippingTrolleyOptions = useMemo(() => {
+    const set = new Set<string>(gatePassTrolleyOptions);
+    set.delete('—');
+    return Array.from(set).sort();
+  }, [gatePassTrolleyOptions]);
 
   async function openGaugePreview(dateOverride?: string) {
     const date = toIsoDate(dateOverride || (selectedDate !== 'ALL' ? selectedDate : undefined));
@@ -587,6 +649,34 @@ export default function Reports() {
     }
   }
 
+  async function openFittingWeightListPreview(dateOverride?: string) {
+    const date = toIsoDate(dateOverride || (selectedDate !== 'ALL' ? selectedDate : undefined));
+    setFwlDate(date);
+    setFwlOpen(true);
+    setFwlLoading(true);
+    setFwlPreview(null);
+    try {
+      const data = await api.getFittingWeightListPreview({ date });
+      setFwlPreview(data);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to load Fitting Weight List preview');
+      setFwlOpen(false);
+    } finally {
+      setFwlLoading(false);
+    }
+  }
+
+  async function handleDownloadFittingWeightList() {
+    setFwlDownloading(true);
+    try {
+      await api.downloadFittingWeightList({ date: fwlDate });
+    } catch (err: any) {
+      alert(err?.message || 'Failed to download Fitting Weight List');
+    } finally {
+      setFwlDownloading(false);
+    }
+  }
+
   function resolveProjectId(projectName: string): number | undefined {
     if (!projectName || projectName === 'ALL') return undefined;
     const found = liveProjects.find((p: any) => {
@@ -604,16 +694,28 @@ export default function Reports() {
     const date = toIsoDate(
       dateOverride || (selectedDate !== 'ALL' ? selectedDate : gatePassDate),
     );
-    const trolley = trolleyOverride ?? gatePassTrolley;
+    const requestedTrolley = trolleyOverride ?? gatePassTrolley;
     const project = projectOverride ?? gatePassProject;
     setGatePassDate(date);
-    setGatePassTrolley(trolley);
     setGatePassProject(project);
     setGatePassOpen(true);
     setGatePassLoading(true);
     setGatePassPreview(null);
     try {
       const projectId = resolveProjectId(project);
+      // Trolley list comes from the date alone, so changing project/trolley never
+      // shrinks the dropdown to a single option.
+      const trolleysForDate = await api.getGatePassPreview({ date });
+      const options = (trolleysForDate.trolleys || []).filter((t) => t !== '—');
+      setGatePassTrolleyOptions(options);
+
+      // A trolley from another date is not valid here — fall back to all.
+      const trolley =
+        requestedTrolley !== 'ALL' && !options.includes(requestedTrolley)
+          ? 'ALL'
+          : requestedTrolley;
+      setGatePassTrolley(trolley);
+
       const data = await api.getGatePassPreview({
         date,
         trolley: trolley !== 'ALL' ? trolley : undefined,
@@ -718,6 +820,27 @@ export default function Reports() {
           >
             <Download size={14} />
             <span>Shipping List</span>
+          </button>
+
+          <button
+            onClick={() => openFittingWeightListPreview()}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              background: 'linear-gradient(135deg, #B45309 0%, #D97706 100%)',
+              color: '#FFFFFF',
+              padding: '6px 16px',
+              borderRadius: 6,
+              fontSize: '0.8125rem',
+              fontWeight: 700,
+              border: 'none',
+              cursor: 'pointer',
+              boxShadow: '0 1px 6px rgba(217, 119, 6, 0.3)',
+            }}
+          >
+            <Download size={14} />
+            <span>Fitting Weight List</span>
           </button>
 
           <button
@@ -1667,6 +1790,332 @@ export default function Reports() {
         </div>
       )}
 
+      {/* ─── Fitting Weight List Preview Modal ─── */}
+      {fwlOpen && (
+        <div
+          onClick={() => setFwlOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.55)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#FFFFFF',
+              borderRadius: 12,
+              width: '100%',
+              maxWidth: 1200,
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              border: '1px solid #E5E7EB',
+            }}
+          >
+            <div
+              style={{
+                padding: '14px 18px',
+                borderBottom: '1px solid #E5E7EB',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>
+                  Fitting Weight List
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#6B7280', marginTop: 2 }}>
+                  {fwlPreview
+                    ? `Parts shipped on — ${fwlPreview.displayDate}`
+                    : 'End-of-day shipped parts table (no pie chart)'}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    color: '#374151',
+                    background: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: 6,
+                    padding: '4px 8px',
+                  }}
+                >
+                  <Calendar size={13} color="#D97706" />
+                  Date
+                  <input
+                    type="date"
+                    value={fwlDate}
+                    onChange={(e) => openFittingWeightListPreview(e.target.value)}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      fontWeight: 700,
+                      color: '#111827',
+                      outline: 'none',
+                    }}
+                  />
+                </label>
+
+                <button
+                  onClick={handleDownloadFittingWeightList}
+                  disabled={fwlDownloading || fwlLoading || !fwlPreview || fwlPreview.rowCount === 0}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background:
+                      fwlPreview && fwlPreview.rowCount > 0 ? '#D97706' : '#9CA3AF',
+                    color: '#FFFFFF',
+                    padding: '7px 14px',
+                    borderRadius: 6,
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    border: 'none',
+                    cursor:
+                      fwlPreview && fwlPreview.rowCount > 0 && !fwlDownloading
+                        ? 'pointer'
+                        : 'not-allowed',
+                  }}
+                >
+                  <Download size={14} />
+                  {fwlDownloading ? 'Downloading…' : 'Download Excel'}
+                </button>
+
+                <button
+                  onClick={() => setFwlOpen(false)}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 6,
+                    border: '1px solid #E5E7EB',
+                    background: '#FFFFFF',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <X size={16} color="#374151" />
+                </button>
+              </div>
+            </div>
+
+            {fwlLoading && (
+              <div style={{ padding: 40, textAlign: 'center', color: '#6B7280', fontWeight: 600 }}>
+                Building preview…
+              </div>
+            )}
+
+            {!fwlLoading && fwlPreview && (
+              <>
+                <div
+                  style={{
+                    padding: '10px 18px',
+                    background: '#FFFBEB',
+                    borderBottom: '1px solid #FDE68A',
+                    display: 'flex',
+                    gap: 18,
+                    flexWrap: 'wrap',
+                    fontSize: '0.8rem',
+                    color: '#78350F',
+                  }}
+                >
+                  <span>
+                    Parts:{' '}
+                    <strong style={{ color: '#92400E' }}>{fwlPreview.unitCount}</strong>
+                  </span>
+                  <span>
+                    Rows:{' '}
+                    <strong style={{ color: '#92400E' }}>{fwlPreview.rowCount}</strong>
+                  </span>
+                  <span>
+                    Total weight:{' '}
+                    <strong style={{ color: '#92400E' }}>
+                      {fwlPreview.totalWeight.toLocaleString()} kg
+                    </strong>
+                  </span>
+                  <span style={{ color: '#A16207' }}>{fwlPreview.message}</span>
+                </div>
+
+                <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: 12 }}>
+                  {fwlPreview.sections.length === 0 ? (
+                    <div style={{ padding: 40, textAlign: 'center', color: '#6B7280' }}>
+                      No parts were shipped on this date.
+                    </div>
+                  ) : (
+                    fwlPreview.sections.map((section) => (
+                      <div key={section.fitting} style={{ marginBottom: 18 }}>
+                        <div
+                          style={{
+                            fontWeight: 800,
+                            fontSize: '0.9rem',
+                            color: '#0F172A',
+                            background: '#DBEAFE',
+                            padding: '8px 12px',
+                            borderRadius: '6px 6px 0 0',
+                            border: '1px solid #BFDBFE',
+                            borderBottom: 'none',
+                          }}
+                        >
+                          {section.fitting}
+                        </div>
+                        <div style={{ overflowX: 'auto', border: '1px solid #E5E7EB', borderRadius: '0 0 6px 6px' }}>
+                          <table
+                            style={{
+                              width: '100%',
+                              borderCollapse: 'collapse',
+                              fontSize: '0.75rem',
+                            }}
+                          >
+                            <thead>
+                              <tr>
+                                {['Project', 'Job', 'Piece #', 'Qty', 'Width', 'Depth', 'Length', 'Size', 'Area', 'Weight'].map(
+                                  (h) => (
+                                    <th
+                                      key={h}
+                                      style={{
+                                        padding: '8px 10px',
+                                        textAlign:
+                                          h === 'Project' || h === 'Job' || h === 'Piece #' || h === 'Size'
+                                            ? 'left'
+                                            : 'right',
+                                        fontWeight: 700,
+                                        whiteSpace: 'nowrap',
+                                        backgroundColor: '#1F4E78',
+                                        color: '#FFFFFF',
+                                        fontSize: '0.7rem',
+                                      }}
+                                    >
+                                      {h}
+                                    </th>
+                                  ),
+                                )}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {section.rows.map((row, idx) => (
+                                <tr
+                                  key={`${row.projectName}-${row.jobName}-${row.pieceNumber}-${idx}`}
+                                  style={{
+                                    borderBottom: '1px solid #E5E7EB',
+                                    backgroundColor: idx % 2 === 0 ? '#FFFFFF' : '#F9FBFD',
+                                  }}
+                                >
+                                  <td style={{ padding: '7px 10px', fontWeight: 600 }}>{row.projectName}</td>
+                                  <td style={{ padding: '7px 10px' }}>{row.jobName}</td>
+                                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700 }}>
+                                    {row.pieceNumber}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', textAlign: 'right' }}>{row.qty}</td>
+                                  <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                                    {row.width ?? '—'}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                                    {row.depth ?? '—'}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                                    {row.length ?? '—'}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                                    {row.size || '—'}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                                    {row.area.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
+                                    {row.weight.toLocaleString(undefined, {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr style={{ background: '#F8FAFC' }}>
+                                <td
+                                  colSpan={3}
+                                  style={{
+                                    padding: '8px 10px',
+                                    textAlign: 'right',
+                                    fontWeight: 700,
+                                    color: '#1F4E78',
+                                  }}
+                                >
+                                  Subtotal — {section.fitting}
+                                </td>
+                                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#1F4E78' }}>
+                                  {section.qty}
+                                </td>
+                                <td colSpan={4} />
+                                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#1F4E78' }}>
+                                  {section.area.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                                </td>
+                                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#1F4E78' }}>
+                                  {section.weight.toLocaleString(undefined, {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))
+                  )}
+
+                  {fwlPreview.sections.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        padding: '10px 14px',
+                        background: '#EBF1F5',
+                        borderRadius: 6,
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        gap: 24,
+                        fontWeight: 800,
+                        color: '#1F4E78',
+                        fontSize: '0.85rem',
+                      }}
+                    >
+                      <span>Totals — Qty {fwlPreview.totalQty}</span>
+                      <span>
+                        Area{' '}
+                        {fwlPreview.totalArea.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                      </span>
+                      <span>
+                        Weight{' '}
+                        {fwlPreview.totalWeight.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}{' '}
+                        kg
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ─── Shipping List Preview Modal ─── */}
       {gatePassOpen && (
         <div
@@ -1768,10 +2217,7 @@ export default function Reports() {
                   }}
                 >
                   <option value="ALL">All Trolleys</option>
-                  {(gatePassPreview?.trolleys?.length
-                    ? gatePassPreview.trolleys
-                    : availableVehicles
-                  ).map((v) => (
+                  {shippingTrolleyOptions.map((v) => (
                     <option key={v} value={v}>
                       Trolly# {v}
                     </option>
@@ -1864,13 +2310,13 @@ export default function Reports() {
                       <strong style={{ color: '#0F172A' }}>{gatePassPreview.passCount}</strong>
                     </span>
                     <span>
-                      Pieces:{' '}
+                      On list:{' '}
                       <strong style={{ color: '#0F172A' }}>{gatePassPreview.totalPieces}</strong>
                     </span>
                     <span>
-                      Weight:{' '}
+                      Progress:{' '}
                       <strong style={{ color: '#0F172A' }}>
-                        {gatePassPreview.totalWeight.toLocaleString()} kg
+                        {gatePassPreview.totalJobShipped} of {gatePassPreview.totalJobParts} parts shipped
                       </strong>
                     </span>
                     <span style={{ color: '#64748B' }}>{gatePassPreview.message}</span>
@@ -1952,23 +2398,39 @@ export default function Reports() {
                               <div style={{ fontWeight: 700, color: '#0F172A' }}>{pass.shippingDate}</div>
                             </div>
                             <div>
-                              <div style={{ color: '#64748B', fontWeight: 600 }}>ACTUAL WEIGHT DISPATCHED</div>
-                              <div style={{ fontWeight: 700, color: '#0F172A' }}>
-                                {pass.actualWeight.toLocaleString(undefined, {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </div>
-                            </div>
-                            <div>
                               <div style={{ color: '#64748B', fontWeight: 600 }}>Short name</div>
                               <div style={{ fontWeight: 600, color: '#334155' }}>{pass.projectShortName}</div>
                             </div>
                             <div>
-                              <div style={{ color: '#64748B', fontWeight: 600 }}>Total pieces</div>
+                              <div style={{ color: '#64748B', fontWeight: 600 }}>On this list</div>
                               <div style={{ fontWeight: 700, color: '#0F172A' }}>{pass.totalPieces}</div>
                             </div>
                           </div>
+                          {pass.jobs.length > 0 && (
+                            <div
+                              style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                background: '#FFFFFF',
+                                border: '1px solid #E2E8F0',
+                                borderRadius: 6,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                              }}
+                            >
+                              <div style={{ color: '#64748B', fontWeight: 700, fontSize: '0.72rem', textTransform: 'uppercase' }}>
+                                Job shipping progress
+                              </div>
+                              {pass.jobs.map((job) => (
+                                <div key={`summary-${job.jobName}`} style={{ fontSize: '0.8rem', color: '#0F172A', lineHeight: 1.45 }}>
+                                  {job.totalParts > 0
+                                    ? `For ${job.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped out of ${job.totalParts} total.`
+                                    : `For ${job.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped.`}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           </div>
 
                           {(pass.projectId || pass.projectName) && (
@@ -2023,11 +2485,23 @@ export default function Reports() {
                                 fontWeight: 600,
                                 fontSize: '0.82rem',
                                 color: '#0F172A',
-                                marginBottom: 8,
+                                marginBottom: 6,
                               }}
                             >
                               <span>JOB NAME {job.jobName}</span>
                               <span>ACCOUNT {job.account || '—'}</span>
+                            </div>
+                            <div
+                              style={{
+                                fontSize: '0.82rem',
+                                color: '#334155',
+                                marginBottom: 10,
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              {job.totalParts > 0
+                                ? `For ${job.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped out of ${job.totalParts} total.`
+                                : `For ${job.jobName}, ${job.shippedParts} ${job.shippedParts === 1 ? 'part has' : 'parts have'} been shipped.`}
                             </div>
                             <div style={{ overflowX: 'auto' }}>
                               <table
@@ -2060,7 +2534,7 @@ export default function Reports() {
                                         {row.trackingNo || '—'}
                                       </td>
                                       <td>{row.item}</td>
-                                      <td>{row.size || '—'}</td>
+                                      <td style={{ whiteSpace: 'nowrap' }}>{row.size || '—'}</td>
                                       <td style={{ whiteSpace: 'nowrap' }}>{row.shippedAt}</td>
                                     </tr>
                                   ))}
@@ -2076,7 +2550,9 @@ export default function Reports() {
                                 textAlign: 'right',
                               }}
                             >
-                              No. of Piece {job.pieceCount}
+                              {job.totalParts > 0
+                                ? `${job.shippedParts} of ${job.totalParts} parts shipped for this job`
+                                : `${job.pieceCount} pieces on this list`}
                             </div>
                           </div>
                         ))}
@@ -2091,7 +2567,9 @@ export default function Reports() {
                             fontSize: '0.85rem',
                           }}
                         >
-                          {pass.totalPieces} Total no. of Piece
+                          {pass.totalJobParts > 0
+                            ? `${pass.totalJobShipped} of ${pass.totalJobParts} parts shipped across all jobs`
+                            : `${pass.totalPieces} pieces on this list`}
                         </div>
                       </div>
                     ))

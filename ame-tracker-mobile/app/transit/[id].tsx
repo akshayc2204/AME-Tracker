@@ -26,12 +26,14 @@ import {
   Edit3,
   X,
   AlertCircle,
+  Trash2,
 } from 'lucide-react-native'
 import { ScanCameraModal } from '@/components/ScanCameraModal'
 import { VehiclePhotoCameraModal } from '@/components/VehiclePhotoCameraModal'
 import { ProductConfirmModal } from '@/components/ProductConfirmModal'
 import {
   completeTransit,
+  deleteTransit,
   getTransit,
   previewTransitScan,
   scanTransitProduct,
@@ -55,12 +57,57 @@ function makeRequestId() {
   return `scan-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function isUnsetVehicle(value?: string | null) {
+  if (!value?.trim()) return true
+  return /^Dispatch #\d+$/i.test(value.trim())
+}
+
+const POST_COMPLETE_EDIT_MS = 6 * 60 * 60 * 1000
+
+function isWithinPostCompleteEditWindow(
+  status?: string,
+  completedAt?: string | null,
+  canEdit?: boolean,
+  editWindowEndsAt?: string | null,
+) {
+  if (status === 'ACTIVE') return true
+  if (status !== 'COMPLETED') return false
+  if (typeof canEdit === 'boolean') return canEdit
+  if (editWindowEndsAt) {
+    return Date.now() <= new Date(editWindowEndsAt).getTime()
+  }
+  if (!completedAt) return false
+  return Date.now() - new Date(completedAt).getTime() <= POST_COMPLETE_EDIT_MS
+}
+
+function formatEditWindowRemaining(editWindowEndsAt?: string | null, completedAt?: string | null) {
+  const endsAt = editWindowEndsAt
+    ? new Date(editWindowEndsAt).getTime()
+    : completedAt
+      ? new Date(completedAt).getTime() + POST_COMPLETE_EDIT_MS
+      : null
+  if (!endsAt) return null
+  const remainingMs = endsAt - Date.now()
+  if (remainingMs <= 0) return null
+  const totalMinutes = Math.ceil(remainingMs / (60 * 1000))
+  if (totalMinutes < 60) {
+    return `${totalMinutes} min left to edit`
+  }
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (minutes === 0) {
+    return `${hours}h left to edit`
+  }
+  return `${hours}h ${minutes}m left to edit`
+}
+
 export default function TransitScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const [loading, setLoading] = useState(true)
   const [busyScan, setBusyScan] = useState(false)
   const [scannerOpen, setScannerOpen] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [photoCameraOpen, setPhotoCameraOpen] = useState(false)
   const [localPhotoUri, setLocalPhotoUri] = useState<string | null>(null)
@@ -76,6 +123,8 @@ export default function TransitScreen() {
   const [editModalVisible, setEditModalVisible] = useState(false)
   const [editVehicleInput, setEditVehicleInput] = useState('')
   const [savingVehicle, setSavingVehicle] = useState(false)
+  /** Completed dispatches stay view-only until user taps Edit (within 6h window). */
+  const [editMode, setEditMode] = useState(false)
 
   const refresh = useCallback(async (silent = false) => {
     if (!id) return
@@ -131,6 +180,20 @@ export default function TransitScreen() {
     }, [refresh]),
   )
 
+  // Leave edit mode if the 6-hour window expires while viewing.
+  useEffect(() => {
+    if (!transit || transit.status !== 'COMPLETED' || !editMode) return
+    const stillOpen = isWithinPostCompleteEditWindow(
+      transit.status,
+      transit.completedAt,
+      transit.canEdit,
+      transit.editWindowEndsAt,
+    )
+    if (!stillOpen) {
+      setEditMode(false)
+    }
+  }, [transit, editMode])
+
   useEffect(() => {
     let cancelled = false
     const retryPending = async () => {
@@ -170,6 +233,7 @@ export default function TransitScreen() {
       PRODUCT_ALREADY_SCANNED: 'Already Scanned',
       PRODUCT_ALREADY_LOADED: 'Already Loaded',
       PRODUCT_NOT_READY: 'Part Not Ready',
+      TRANSIT_EDIT_WINDOW_EXPIRED: 'Edit Window Expired',
       NETWORK_ERROR: 'Network Error',
     }
 
@@ -215,12 +279,41 @@ export default function TransitScreen() {
   }
 
   const handleTakePhoto = () => {
-    if (!id || !transit || transit.status !== 'ACTIVE' || uploadingPhoto) return
+    if (!id || !transit || uploadingPhoto) return
+    if (transit.status === 'CANCELLED') return
+    if (
+      transit.status === 'COMPLETED' &&
+      !editMode
+    ) {
+      return
+    }
+    if (
+      !isWithinPostCompleteEditWindow(
+        transit.status,
+        transit.completedAt,
+        transit.canEdit,
+        transit.editWindowEndsAt,
+      )
+    ) {
+      return
+    }
     setPhotoCameraOpen(true)
   }
 
   const handlePickFromGallery = async () => {
-    if (!id || !transit || transit.status !== 'ACTIVE') return
+    if (!id || !transit) return
+    if (transit.status === 'CANCELLED') return
+    if (transit.status === 'COMPLETED' && !editMode) return
+    if (
+      !isWithinPostCompleteEditWindow(
+        transit.status,
+        transit.completedAt,
+        transit.canEdit,
+        transit.editWindowEndsAt,
+      )
+    ) {
+      return
+    }
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (!permission.granted) {
       Alert.alert('Permission Required', 'Enable photo library access')
@@ -236,7 +329,8 @@ export default function TransitScreen() {
   }
 
   const openEditVehicleModal = () => {
-    setEditVehicleInput(transit?.transitNumber || '')
+    const current = transit?.transitNumber || ''
+    setEditVehicleInput(isUnsetVehicle(current) ? '' : current)
     setEditModalVisible(true)
   }
 
@@ -264,33 +358,85 @@ export default function TransitScreen() {
     }
   }
 
-  const handleComplete = async () => {
-    if (!id || !transit) return
-    if (!transit.truckPhotoUrl) {
+  const handleDelete = () => {
+    if (!id || !transit || transit.status !== 'ACTIVE' || deleting) return
+    Alert.alert(
+      'Delete Dispatch?',
+      'This dispatch is not completed yet. It will be removed, and any scanned parts will go back to pending so they can be loaded again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => void confirmDelete(),
+        },
+      ],
+    )
+  }
+
+  const confirmDelete = async () => {
+    if (!id || deleting) return
+    setDeleting(true)
+    try {
+      await deleteTransit(id)
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      Alert.alert('Dispatch Deleted', 'The dispatch was removed.', [
+        { text: 'OK', onPress: () => router.replace('/(tabs)') },
+      ])
+    } catch (e) {
       Alert.alert(
-        'Vehicle Photo Required',
-        'Please take a vehicle photo before completing this dispatch.',
+        'Cannot Delete',
+        e instanceof ApiClientError ? e.message : 'Unable to delete this dispatch',
       )
-      return
+    } finally {
+      setDeleting(false)
     }
+  }
+
+  const handleCompletePress = () => {
+    if (!id || !transit || completing) return
     if ((transit.summary?.products || 0) < 1) {
       Alert.alert('Empty Dispatch', 'Scan at least one part before completing.')
       return
     }
 
+    Alert.alert(
+      'Complete Dispatch?',
+      'Are you sure you want to complete this dispatch?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Done',
+          onPress: () => void confirmComplete(),
+        },
+      ],
+    )
+  }
+
+  const confirmComplete = async () => {
+    if (!id || !transit || completing) return
+
     setCompleting(true)
     try {
       const result = await completeTransit(id)
+      const missingVehicle = isUnsetVehicle(result.transitNumber)
+      const missingPhoto = !transit.truckPhotoUrl && !result.truckPhotoUrl
+      const laterHint =
+        missingVehicle || missingPhoto
+          ? '\n\nYou can tap Edit within 6 hours to add vehicle number, photo, or scan more parts.'
+          : '\n\nYou can tap Edit within 6 hours to make changes or scan more parts.'
       Alert.alert(
         '✓ DISPATCH COMPLETED',
-        `Vehicle: ${result.transitNumber}\n\n${result.productsLoaded} parts loaded and shipped successfully.`,
+        `${result.productsLoaded} parts loaded and shipped successfully.${laterHint}`,
         [
+          { text: 'STAY HERE' },
           {
-            text: 'NEW DISPATCH',
+            text: 'DONE',
             onPress: () => router.replace('/(tabs)'),
           },
         ],
       )
+      setEditMode(false)
       await refresh()
     } catch (e) {
       Alert.alert(
@@ -322,9 +468,53 @@ export default function TransitScreen() {
   }
 
   const isActive = transit.status === 'ACTIVE'
+  const withinEditWindow = isWithinPostCompleteEditWindow(
+    transit.status,
+    transit.completedAt,
+    transit.canEdit,
+    transit.editWindowEndsAt,
+  )
+  // Active: always editable. Completed: only after user taps Edit, and only within 6h.
+  const isEditing = isActive || (transit.status === 'COMPLETED' && editMode && withinEditWindow)
+  const canOfferEdit = transit.status === 'COMPLETED' && withinEditWindow
+  const canEditVehicleDetails = isEditing
+  const canScan = isEditing
+  const editWindowLabel =
+    transit.status === 'COMPLETED' && withinEditWindow
+      ? formatEditWindowRemaining(transit.editWindowEndsAt, transit.completedAt)
+      : null
   const productCount = transit.summary?.products ?? 0
-  const vehicleNoDisplay = transit.transitNumber
+  const vehicleNoDisplay = isUnsetVehicle(transit.transitNumber)
+    ? 'No vehicle'
+    : transit.transitNumber
   const previewPhoto = localPhotoUri || resolveMediaUrl(transit.truckPhotoUrl)
+  const projectGroups = (transit.grouped || []).flatMap((clientGroup) =>
+    (clientGroup.projects || []).map((projectGroup) => ({
+      key: `${clientGroup.client}-${projectGroup.project}`,
+      project: projectGroup.project,
+      partCount: projectGroup.partCount ?? 0,
+      jobs: projectGroup.jobs || [],
+    })),
+  )
+
+  const enterEditMode = () => {
+    if (!canOfferEdit) {
+      Alert.alert(
+        'Edit Window Expired',
+        'This completed dispatch can only be edited within 6 hours of completion.',
+      )
+      return
+    }
+    setEditMode(true)
+  }
+
+  const exitEditMode = () => {
+    setEditMode(false)
+    setScannerOpen(false)
+    setPhotoCameraOpen(false)
+    setPreview(null)
+    setPendingQr(null)
+  }
 
   return (
     <View style={styles.container}>
@@ -339,7 +529,7 @@ export default function TransitScreen() {
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Text style={styles.headerTitle}>{vehicleNoDisplay}</Text>
-            {isActive && (
+            {canEditVehicleDetails && (
               <TouchableOpacity
                 onPress={openEditVehicleModal}
                 style={styles.editPlateBtn}
@@ -349,9 +539,57 @@ export default function TransitScreen() {
             )}
           </View>
         </View>
+        {isActive ? (
+          <TouchableOpacity
+            style={styles.deleteHeaderBtn}
+            onPress={handleDelete}
+            disabled={deleting}
+          >
+            {deleting ? (
+              <ActivityIndicator color="#DC2626" size="small" />
+            ) : (
+              <Trash2 size={20} color="#DC2626" />
+            )}
+          </TouchableOpacity>
+        ) : canOfferEdit ? (
+          isEditing ? (
+            <TouchableOpacity style={styles.doneEditHeaderBtn} onPress={exitEditMode}>
+              <Text style={styles.doneEditHeaderBtnText}>Done</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.editHeaderBtn} onPress={enterEditMode}>
+              <Edit3 size={16} color="#FFFFFF" />
+              <Text style={styles.editHeaderBtnText}>Edit</Text>
+            </TouchableOpacity>
+          )
+        ) : null}
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          (canScan || canOfferEdit) && styles.contentWithFooter,
+        ]}
+      >
+        {canOfferEdit && !isEditing ? (
+          <View style={styles.editWindowBanner}>
+            <AlertCircle size={16} color="#B45309" />
+            <Text style={styles.editWindowBannerText}>
+              Completed — tap Edit within 6 hours to scan or update details
+              {editWindowLabel ? ` (${editWindowLabel})` : ''}
+            </Text>
+          </View>
+        ) : null}
+        {canOfferEdit && isEditing ? (
+          <View style={styles.editingBanner}>
+            <Edit3 size={16} color="#047857" />
+            <Text style={styles.editingBannerText}>
+              Editing mode — scan parts or update vehicle details
+              {editWindowLabel ? ` · ${editWindowLabel}` : ''}
+            </Text>
+          </View>
+        ) : null}
+
         {/* ─── Vehicle Photo Verification Card ─── */}
         <View style={styles.vehicleCard}>
           <View style={styles.vehicleCardHeader}>
@@ -359,9 +597,19 @@ export default function TransitScreen() {
               <Truck size={20} color="#078710" />
               <Text style={styles.vehicleCardTitle}>Vehicle Information</Text>
             </View>
-            <View style={styles.vehiclePlateBadge}>
-              <Text style={styles.vehiclePlateText}>{vehicleNoDisplay}</Text>
-            </View>
+            {canEditVehicleDetails && isUnsetVehicle(transit.transitNumber) ? (
+              <TouchableOpacity
+                onPress={openEditVehicleModal}
+                style={styles.addVehicleChip}
+              >
+                <Edit3 size={12} color="#078710" />
+                <Text style={styles.addVehicleChipText}>Add vehicle no.</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.vehiclePlateBadge}>
+                <Text style={styles.vehiclePlateText}>{vehicleNoDisplay}</Text>
+              </View>
+            )}
           </View>
 
           {/* Photo Section */}
@@ -394,7 +642,7 @@ export default function TransitScreen() {
                 </TouchableOpacity>
               )}
 
-              {isActive && (
+              {canEditVehicleDetails && (
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
                   <TouchableOpacity
                     style={styles.retakeBtn}
@@ -410,13 +658,13 @@ export default function TransitScreen() {
           ) : (
             <View style={styles.photoPendingContainer}>
               <View style={styles.photoWarningRow}>
-                <AlertCircle size={16} color="#D97706" />
-                <Text style={styles.photoWarningText}>
-                  Vehicle photo required before completing dispatch
+                <AlertCircle size={16} color="#6B7280" />
+                <Text style={styles.photoOptionalText}>
+                  Vehicle photo is optional — you can add it now or later
                 </Text>
               </View>
 
-              {isActive && (
+              {canEditVehicleDetails && (
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
                   <TouchableOpacity
                     style={styles.takePhotoPrimaryBtn}
@@ -453,14 +701,14 @@ export default function TransitScreen() {
             <Text style={styles.statLabel}>Parts Loaded</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>{transit.summary?.clients ?? 0}</Text>
-            <Text style={styles.statLabel}>Clients</Text>
-          </View>
-          <View style={styles.statCard}>
             <Text style={styles.statValue}>
               {transit.summary?.projects ?? 0}
             </Text>
             <Text style={styles.statLabel}>Projects</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{transit.summary?.jobs ?? 0}</Text>
+            <Text style={styles.statLabel}>Jobs</Text>
           </View>
         </View>
 
@@ -470,11 +718,12 @@ export default function TransitScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.successTitle}>✓ PART LOADED</Text>
               <Text style={styles.successText}>
-                {lastSuccess.product.client} · {lastSuccess.product.project} ·
+                {lastSuccess.product.project} ·{' '}
+                {lastSuccess.product.jobName || lastSuccess.product.job} ·
                 Piece #{lastSuccess.product.pieceNumber}
               </Text>
             </View>
-            {isActive ? (
+            {canScan ? (
               <TouchableOpacity
                 style={styles.scanNextChip}
                 onPress={() => setScannerOpen(true)}
@@ -486,19 +735,41 @@ export default function TransitScreen() {
         ) : null}
 
         <Text style={styles.sectionTitle}>Scanned Parts ({productCount})</Text>
-        {(transit.grouped || []).length === 0 ? (
+        {projectGroups.length === 0 ? (
           <View style={styles.emptyCard}>
             <QrCode size={32} color="#9CA3AF" />
             <Text style={styles.empty}>No parts loaded yet. Tap SCAN QR below.</Text>
           </View>
         ) : (
-          (transit.grouped || []).map((clientGroup: any) => (
-            <View key={clientGroup.client} style={styles.group}>
-              <Text style={styles.clientName}>{clientGroup.client}</Text>
-              {clientGroup.projects.map((projectGroup: any) => (
-                <View key={projectGroup.project} style={styles.projectBlock}>
-                  <Text style={styles.projectName}>{projectGroup.project}</Text>
-                  {projectGroup.products.map((p: any) => (
+          projectGroups.map((projectGroup) => (
+            <View key={projectGroup.key} style={styles.projectBlock}>
+              <View style={styles.projectHeader}>
+                <Text style={styles.projectName} numberOfLines={2}>
+                  {projectGroup.project}
+                </Text>
+                <Text style={styles.projectMeta}>
+                  {projectGroup.jobs.length} job{projectGroup.jobs.length === 1 ? '' : 's'} ·{' '}
+                  {projectGroup.partCount} part{projectGroup.partCount === 1 ? '' : 's'}
+                </Text>
+              </View>
+
+              {projectGroup.jobs.map((job) => (
+                <View key={job.jobCode} style={styles.jobBlock}>
+                  <View style={styles.jobHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.jobName} numberOfLines={1}>
+                        {job.jobName}
+                      </Text>
+                      <Text style={styles.jobCode} numberOfLines={1}>
+                        #{job.jobCode}
+                      </Text>
+                    </View>
+                    <View style={styles.jobCountBadge}>
+                      <Text style={styles.jobCountText}>{job.partCount}</Text>
+                    </View>
+                  </View>
+
+                  {job.products.map((p) => (
                     <View key={p.productId} style={styles.productRow}>
                       <Text style={styles.productText}>
                         Piece #{p.pieceNumber}
@@ -528,17 +799,56 @@ export default function TransitScreen() {
           <TouchableOpacity
             style={[
               styles.completeButton,
-              (!transit.truckPhotoUrl || productCount < 1 || completing) &&
-              styles.completeDisabled,
+              (productCount < 1 || completing || deleting) && styles.completeDisabled,
             ]}
-            disabled={!transit.truckPhotoUrl || productCount < 1 || completing}
-            onPress={() => void handleComplete()}
+            disabled={productCount < 1 || completing || deleting}
+            onPress={handleCompletePress}
           >
             {completing ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.completeButtonText}>COMPLETE DISPATCH</Text>
             )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.deleteButton, deleting && styles.completeDisabled]}
+            disabled={deleting || completing}
+            onPress={handleDelete}
+          >
+            {deleting ? (
+              <ActivityIndicator color="#DC2626" />
+            ) : (
+              <>
+                <Trash2 size={16} color="#DC2626" />
+                <Text style={styles.deleteButtonText}>DELETE DISPATCH</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : canOfferEdit && !isEditing ? (
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.editDispatchButton} onPress={enterEditMode}>
+            <Edit3 size={20} color="#FFFFFF" />
+            <Text style={styles.editDispatchButtonText}>EDIT DISPATCH</Text>
+          </TouchableOpacity>
+          <Text style={styles.completedEditHint}>
+            Available for 6 hours after completion
+            {editWindowLabel ? ` — ${editWindowLabel}` : ''}.
+          </Text>
+        </View>
+      ) : canOfferEdit && isEditing ? (
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={styles.scanButton}
+            onPress={() => setScannerOpen(true)}
+          >
+            <QrCode size={22} color="#fff" />
+            <Text style={styles.scanButtonText}>
+              {productCount > 0 ? 'SCAN NEXT PART' : 'SCAN QR CODE'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.doneEditingButton} onPress={exitEditMode}>
+            <Text style={styles.doneEditingButtonText}>DONE EDITING</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -556,7 +866,9 @@ export default function TransitScreen() {
         >
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Vehicle Number</Text>
+              <Text style={styles.modalTitle}>
+                {isUnsetVehicle(transit.transitNumber) ? 'Add Vehicle Number' : 'Edit Vehicle Number'}
+              </Text>
               <TouchableOpacity
                 onPress={() => setEditModalVisible(false)}
                 style={styles.modalCloseBtn}
@@ -566,7 +878,7 @@ export default function TransitScreen() {
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>VEHICLE NO / PLATE #</Text>
+              <Text style={styles.inputLabel}>VEHICLE NO / PLATE # (OPTIONAL)</Text>
               <TextInput
                 style={styles.input}
                 value={editVehicleInput}
@@ -604,7 +916,7 @@ export default function TransitScreen() {
       </Modal>
 
       <VehiclePhotoCameraModal
-        visible={photoCameraOpen && isActive}
+        visible={photoCameraOpen && canEditVehicleDetails}
         onClose={() => setPhotoCameraOpen(false)}
         onCapture={(uri) => {
           setPhotoCameraOpen(false)
@@ -612,7 +924,7 @@ export default function TransitScreen() {
         }}
       />
       <ScanCameraModal
-        visible={scannerOpen && isActive}
+        visible={scannerOpen && canScan}
         busy={busyScan}
         onClose={() => setScannerOpen(false)}
         onScan={(code) => void handleScan(code)}
@@ -670,7 +982,113 @@ const styles = StyleSheet.create({
     backgroundColor: '#ECFDF5',
     borderRadius: 6,
   },
-  content: { padding: 16, paddingBottom: 160 },
+  deleteHeaderBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  content: { padding: 16, paddingBottom: 40 },
+  contentWithFooter: { paddingBottom: 220 },
+  editWindowBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  editWindowBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  editingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  editingBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065F46',
+  },
+  editHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#078710',
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  editHeaderBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  doneEditHeaderBtn: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  doneEditHeaderBtnText: {
+    color: '#047857',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  editDispatchButton: {
+    backgroundColor: '#078710',
+    borderRadius: 14,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  editDispatchButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  doneEditingButton: {
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  doneEditingButtonText: {
+    color: '#047857',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  completedEditHint: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
 
   // Vehicle Card Styles
   vehicleCard: {
@@ -709,6 +1127,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#047857',
+  },
+  addVehicleChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  addVehicleChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#078710',
   },
   photoContainer: {
     marginTop: 4,
@@ -766,9 +1200,9 @@ const styles = StyleSheet.create({
     color: '#078710',
   },
   photoPendingContainer: {
-    backgroundColor: '#FFFBEB',
+    backgroundColor: '#F9FAFB',
     borderWidth: 1,
-    borderColor: '#FDE68A',
+    borderColor: '#E5E7EB',
     borderRadius: 10,
     padding: 12,
   },
@@ -776,6 +1210,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  photoOptionalText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4B5563',
+    flex: 1,
   },
   photoWarningText: {
     fontSize: 12,
@@ -878,15 +1318,49 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 8,
   },
-  projectName: { fontWeight: '700', color: '#047857', marginBottom: 8 },
+  projectHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    paddingBottom: 8,
+    marginBottom: 10,
+  },
+  projectName: { fontSize: 15, fontWeight: '800', color: '#047857' },
+  projectMeta: { fontSize: 11, fontWeight: '600', color: '#6B7280', marginTop: 2 },
+  jobBlock: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  jobHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingBottom: 6,
+  },
+  jobName: { fontSize: 13, fontWeight: '800', color: '#1E293B' },
+  jobCode: { fontSize: 11, fontWeight: '600', color: '#6B7280', marginTop: 1 },
+  jobCountBadge: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  jobCountText: { fontSize: 11, fontWeight: '800', color: '#047857' },
   productRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingVertical: 6,
     borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
+    borderTopColor: '#E5E7EB',
   },
-  productText: { color: '#111827', fontWeight: '600' },
+  productText: { color: '#111827', fontWeight: '600', flex: 1 },
   loadedBadge: { color: '#047857', fontWeight: '700', fontSize: 12 },
 
   // Footer Actions
@@ -919,6 +1393,18 @@ const styles = StyleSheet.create({
   },
   completeDisabled: { opacity: 0.45 },
   completeButtonText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  deleteButton: {
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteButtonText: { color: '#DC2626', fontWeight: '800', fontSize: 14 },
 
   // Modal Styles
   modalOverlay: {

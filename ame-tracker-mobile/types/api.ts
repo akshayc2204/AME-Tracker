@@ -37,6 +37,10 @@ export interface TransitSummary {
   truckPhotoUrl?: string | null
   startedAt: string
   completedAt?: string | null
+  /** True while active, or within 6h after completion (edit still requires tapping Edit). */
+  canEdit?: boolean
+  /** ISO timestamp when the post-complete edit window ends (completed only). */
+  editWindowEndsAt?: string | null
   _count?: { transitProducts: number }
   summary?: { products: number; clients: number; projects: number }
 }
@@ -54,6 +58,7 @@ export interface ScanSuccess {
     client: string
     project: string
     job: string
+    jobName?: string
   }
 }
 
@@ -69,6 +74,7 @@ export interface ScanPreview {
     client: string
     project: string
     job: string
+    jobName?: string
   }
 }
 
