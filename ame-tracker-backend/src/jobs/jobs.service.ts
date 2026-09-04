@@ -1,9 +1,14 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
+import { AuditService } from '../audit/audit.service'
+import type { AuthUser } from '../common/decorators/current-user.decorator'
 
 @Injectable()
 export class JobsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async list(search?: string, projectId?: number) {
     const jobs = await this.prisma.job.findMany({
@@ -43,11 +48,13 @@ export class JobsService {
       jobName: row.jobName,
       importVersion: row.importVersion,
       totalParts: row.totalParts,
+      archivedByUserId: row.archivedByUserId,
+      archivedByName: row.archivedByName ?? '—',
       archivedAt: row.archivedAt,
     }))
   }
 
-  async archive(id: number) {
+  async archive(id: number, user: AuthUser) {
     const job = await this.prisma.job.findUnique({
       where: { id: Number(id) },
       include: {
@@ -60,8 +67,9 @@ export class JobsService {
     }
 
     const totalParts = job._count.itemUnits
+    const archivedByName = user.fullName || user.name || user.email || 'Admin'
 
-    await this.prisma.$transaction(async (tx) => {
+    const archive = await this.prisma.$transaction(async (tx) => {
       const units = await tx.itemUnit.findMany({
         where: { jobId: job.id },
         select: { id: true },
@@ -93,7 +101,7 @@ export class JobsService {
         data: { jobId: null },
       })
 
-      await tx.jobArchive.create({
+      const created = await tx.jobArchive.create({
         data: {
           projectId: job.projectId,
           projectName: job.project?.projectName ?? null,
@@ -101,10 +109,35 @@ export class JobsService {
           jobName: job.jobName,
           importVersion: job.importVersion,
           totalParts,
+          archivedByUserId: Number(user.id),
+          archivedByName,
         },
       })
 
       await tx.job.delete({ where: { id: job.id } })
+      return created
+    })
+
+    await this.audit.log({
+      userId: Number(user.id),
+      action: 'JOB_ARCHIVED',
+      entityType: 'JobArchive',
+      entityId: String(archive.id),
+      beforeJson: {
+        jobId: job.id,
+        sourceJobId: job.sourceJobId,
+        jobName: job.jobName,
+        projectId: job.projectId,
+        projectName: job.project?.projectName ?? null,
+        importVersion: job.importVersion,
+        totalParts,
+      },
+      afterJson: {
+        archiveId: archive.id,
+        archivedByUserId: Number(user.id),
+        archivedByName,
+        archivedAt: archive.archivedAt.toISOString(),
+      },
     })
 
     return {
@@ -112,6 +145,8 @@ export class JobsService {
       jobName: job.jobName,
       importVersion: job.importVersion,
       totalParts,
+      archivedByName,
+      archivedAt: archive.archivedAt,
     }
   }
 

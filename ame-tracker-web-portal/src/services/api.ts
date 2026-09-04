@@ -428,6 +428,8 @@ export const api = {
           jobName: string;
           importVersion: number;
           totalParts: number;
+          archivedByUserId?: number | null;
+          archivedByName?: string;
           archivedAt: string;
         }>
       >('/jobs/archives')
@@ -441,6 +443,8 @@ export const api = {
         jobName: string;
         importVersion: number;
         totalParts: number;
+        archivedByName?: string;
+        archivedAt?: string;
       }>(`/jobs/${id}`, { method: 'DELETE' })
     ).data;
   },

@@ -3,6 +3,7 @@ import { JobsService } from './jobs.service'
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard'
 import { RolesGuard } from '../common/guards/roles.guard'
 import { Roles } from '../common/decorators/roles.decorator'
+import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
 import { ok } from '../common/dto/api-response'
 
 @Controller('api/jobs')
@@ -31,8 +32,8 @@ export class JobsController {
 
   @Delete(':id')
   @Roles('ADMIN')
-  async archive(@Param('id') id: string) {
-    return ok(await this.jobsService.archive(Number(id)))
+  async archive(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return ok(await this.jobsService.archive(Number(id), user))
   }
 
   @Get(':jobId/parts/:pieceNo')

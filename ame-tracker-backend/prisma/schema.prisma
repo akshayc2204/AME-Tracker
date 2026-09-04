@@ -70,14 +70,16 @@ model Job {
 
 /// Lightweight history when a user deletes a job — parts data is removed; only totals kept.
 model JobArchive {
-  id            Int      @id @default(autoincrement())
-  projectId     Int?     @map("project_id")
-  projectName   String?  @map("project_name")
-  sourceJobId   String   @map("source_job_id")
-  jobName       String   @map("job_name")
-  importVersion Int      @map("import_version")
-  totalParts    Int      @default(0) @map("total_parts")
-  archivedAt    DateTime @default(now()) @map("archived_at")
+  id               Int      @id @default(autoincrement())
+  projectId        Int?     @map("project_id")
+  projectName      String?  @map("project_name")
+  sourceJobId      String   @map("source_job_id")
+  jobName          String   @map("job_name")
+  importVersion    Int      @map("import_version")
+  totalParts       Int      @default(0) @map("total_parts")
+  archivedByUserId Int?     @map("archived_by_user_id")
+  archivedByName   String?  @map("archived_by_name")
+  archivedAt       DateTime @default(now()) @map("archived_at")
 
   @@index([sourceJobId], map: "idx_job_archives_source")
   @@index([archivedAt], map: "idx_job_archives_date")

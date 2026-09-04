@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   FolderSync, RefreshCw, Save, FolderOpen, CheckCircle, User, Pencil,
-  AlertCircle, Archive, Smartphone, Plus, X,
+  AlertCircle, Archive, Smartphone, Plus, X, ChevronDown,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { api } from '../services/api';
@@ -144,9 +144,12 @@ export default function Admin() {
     sourceJobId: string;
     importVersion: number;
     totalParts: number;
+    archivedByName?: string;
     archivedAt: string;
   }>>([]);
   const [archivesLoading, setArchivesLoading] = useState(true);
+  const [folderJobsOpen, setFolderJobsOpen] = useState(false);
+  const [archivedJobsOpen, setArchivedJobsOpen] = useState(false);
   const [operators, setOperators] = useState<PortalUser[]>([]);
   const [operatorsLoading, setOperatorsLoading] = useState(true);
   const [operatorMsg, setOperatorMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
@@ -437,7 +440,14 @@ export default function Admin() {
   }
 
   const lastRun = folderStatus?.lastRun;
-  const pairs = folderStatus?.pairs ?? [];
+  const pairs = [...(folderStatus?.pairs ?? [])].sort((a, b) => {
+    const aTime = a.lastSyncedAt ? Date.parse(a.lastSyncedAt) : 0;
+    const bTime = b.lastSyncedAt ? Date.parse(b.lastSyncedAt) : 0;
+    if (bTime !== aTime) return bTime - aTime;
+    const aName = (a.jobName || a.pairKey || '').toLowerCase();
+    const bName = (b.jobName || b.pairKey || '').toLowerCase();
+    return aName.localeCompare(bName);
+  });
   const syncOn = folderStatus?.enabled !== false;
   const initials = (fullName || currentUser.avatar || 'A').slice(0, 2).toUpperCase();
   const activeOperators = operators.filter((o) => o.isActive === 1).length;
@@ -798,7 +808,12 @@ export default function Admin() {
           </div>
         </form>
 
-        <div className="admin-jobs-head">
+        <button
+          type="button"
+          className={`admin-jobs-head admin-collapse-toggle ${folderJobsOpen ? 'is-open' : ''}`}
+          onClick={() => setFolderJobsOpen((open) => !open)}
+          aria-expanded={folderJobsOpen}
+        >
           <div>
             <div className="card-title">Jobs in this folder</div>
             <div className="card-subtitle">
@@ -809,76 +824,84 @@ export default function Admin() {
                   : `${pairs.length} job file pairs found`}
             </div>
           </div>
-        </div>
+          <ChevronDown size={18} className="admin-collapse-chevron" />
+        </button>
 
-        <div className="table-wrapper import-history-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>Files</th>
-                <th>Imported</th>
-                <th>Status</th>
-                <th>Last checked</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && !folderStatus ? (
+        {folderJobsOpen && (
+          <div className="table-wrapper import-history-table">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={5} className="admin-empty">
-                    <RefreshCw size={18} className="animate-spin" />
-                    Checking the watch folder…
-                  </td>
+                  <th>Job</th>
+                  <th>Files</th>
+                  <th>Imported</th>
+                  <th>Status</th>
+                  <th>Last checked</th>
                 </tr>
-              ) : pairs.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="admin-empty">
-                    <FolderOpen size={22} />
-                    <div>
-                      <strong>No job files yet</strong>
-                      <div>Drop a matching .t4vjob and .xlsx into the folder, then tap Sync now.</div>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                pairs.map((pair) => (
-                  <tr key={pair.pairKey}>
-                    <td>
-                      <div className="admin-job-name">{pair.jobName || pair.pairKey}</div>
-                      <div className="admin-job-id">{pair.sourceJobId || pair.pairKey}</div>
-                    </td>
-                    <td>
-                      <div className="admin-file-row">
-                        <FileChip present={Boolean(pair.t4vjobFile)} label={pair.t4vjobFile ? 'Job file' : 'No job file'} />
-                        <FileChip present={Boolean(pair.xlsxFile)} label={pair.xlsxFile ? 'Excel file' : 'No Excel file'} />
-                      </div>
-                    </td>
-                    <td>
-                      {pair.itemsImported || pair.unitsImported
-                        ? `${pair.itemsImported} items · ${pair.unitsImported} pieces`
-                        : '—'}
-                    </td>
-                    <td>
-                      <span className={`badge ${folderBadgeClass(pair.status)}`}>
-                        {folderStatusLabel(pair.status)}
-                      </span>
-                    </td>
-                    <td className="admin-muted-cell">
-                      {formatRelative(pair.lastSyncedAt)}
-                      {pair.message ? (
-                        <div className="admin-job-msg">{pair.message}</div>
-                      ) : null}
+              </thead>
+              <tbody>
+                {loading && !folderStatus ? (
+                  <tr>
+                    <td colSpan={5} className="admin-empty">
+                      <RefreshCw size={18} className="animate-spin" />
+                      Checking the watch folder…
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : pairs.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="admin-empty">
+                      <FolderOpen size={22} />
+                      <div>
+                        <strong>No job files yet</strong>
+                        <div>Drop a matching .t4vjob and .xlsx into the folder, then tap Sync now.</div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  pairs.map((pair) => (
+                    <tr key={pair.pairKey}>
+                      <td>
+                        <div className="admin-job-name">{pair.jobName || pair.pairKey}</div>
+                        <div className="admin-job-id">{pair.sourceJobId || pair.pairKey}</div>
+                      </td>
+                      <td>
+                        <div className="admin-file-row">
+                          <FileChip present={Boolean(pair.t4vjobFile)} label={pair.t4vjobFile ? 'Job file' : 'No job file'} />
+                          <FileChip present={Boolean(pair.xlsxFile)} label={pair.xlsxFile ? 'Excel file' : 'No Excel file'} />
+                        </div>
+                      </td>
+                      <td>
+                        {pair.itemsImported || pair.unitsImported
+                          ? `${pair.itemsImported} items · ${pair.unitsImported} pieces`
+                          : '—'}
+                      </td>
+                      <td>
+                        <span className={`badge ${folderBadgeClass(pair.status)}`}>
+                          {folderStatusLabel(pair.status)}
+                        </span>
+                      </td>
+                      <td className="admin-muted-cell">
+                        {formatRelative(pair.lastSyncedAt)}
+                        {pair.message ? (
+                          <div className="admin-job-msg">{pair.message}</div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      <div className="card admin-panel admin-archive-panel">
-        <div className="card-header">
+      <div className={`card admin-panel admin-archive-panel ${archivedJobsOpen ? 'is-open' : ''}`}>
+        <button
+          type="button"
+          className="card-header admin-collapse-toggle"
+          onClick={() => setArchivedJobsOpen((open) => !open)}
+          aria-expanded={archivedJobsOpen}
+        >
           <div className="admin-panel-heading">
             <div className="admin-icon-badge is-slate">
               <Archive size={16} />
@@ -890,53 +913,60 @@ export default function Admin() {
               </div>
             </div>
           </div>
-          {!archivesLoading && archivedJobs.length > 0 && (
-            <span className="admin-count-pill">{archivedJobs.length}</span>
-          )}
-        </div>
-        <div className="card-body admin-archive-body">
-          {archivesLoading ? (
-            <div className="admin-soft-empty">
-              <RefreshCw size={16} className="animate-spin" />
-              Loading…
-            </div>
-          ) : archivedJobs.length === 0 ? (
-            <div className="admin-soft-empty">
-              <Archive size={22} />
-              <div>
-                <strong>No archived jobs</strong>
-                <div>Deleted projects will show up here.</div>
+          <div className="admin-collapse-meta">
+            {!archivesLoading && archivedJobs.length > 0 && (
+              <span className="admin-count-pill">{archivedJobs.length}</span>
+            )}
+            <ChevronDown size={18} className="admin-collapse-chevron" />
+          </div>
+        </button>
+        {archivedJobsOpen && (
+          <div className="card-body admin-archive-body">
+            {archivesLoading ? (
+              <div className="admin-soft-empty">
+                <RefreshCw size={16} className="animate-spin" />
+                Loading…
               </div>
-            </div>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Job</th>
-                    <th>Project</th>
-                    <th>Job ID</th>
-                    <th>Upload</th>
-                    <th>Total parts</th>
-                    <th>Deleted</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {archivedJobs.map((row) => (
-                    <tr key={row.id}>
-                      <td className="admin-job-name">{row.jobName}</td>
-                      <td>{row.projectName}</td>
-                      <td className="td-mono">{row.sourceJobId}</td>
-                      <td>v{row.importVersion}</td>
-                      <td className="admin-parts-count">{row.totalParts}</td>
-                      <td className="admin-muted-cell">{formatDateTime(row.archivedAt)}</td>
+            ) : archivedJobs.length === 0 ? (
+              <div className="admin-soft-empty">
+                <Archive size={22} />
+                <div>
+                  <strong>No archived jobs</strong>
+                  <div>Deleted projects will show up here.</div>
+                </div>
+              </div>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Job</th>
+                      <th>Project</th>
+                      <th>Job ID</th>
+                      <th>Upload</th>
+                      <th>Total parts</th>
+                      <th>Deleted by</th>
+                      <th>Deleted</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                  </thead>
+                  <tbody>
+                    {archivedJobs.map((row) => (
+                      <tr key={row.id}>
+                        <td className="admin-job-name">{row.jobName}</td>
+                        <td>{row.projectName}</td>
+                        <td className="td-mono">{row.sourceJobId}</td>
+                        <td>v{row.importVersion}</td>
+                        <td className="admin-parts-count">{row.totalParts}</td>
+                        <td>{row.archivedByName || '—'}</td>
+                        <td className="admin-muted-cell">{formatDateTime(row.archivedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
