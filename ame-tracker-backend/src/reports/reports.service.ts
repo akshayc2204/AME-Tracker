@@ -1238,6 +1238,7 @@ export class ReportsService {
     }> = []
 
     for (const item of job.items) {
+      if (item.isManual === 1) continue
       const totalUnitsInItem = item.units.length
       for (const unit of item.units) {
         labelList.push({

@@ -277,6 +277,14 @@ export class TransitsService {
       )
     }
 
+    if (unit.item.isManual === 1) {
+      throw new BusinessError(
+        'MANUAL_ITEM_NO_SCAN',
+        `Piece #${unit.item.pieceNumber || unit.item.sourceItemId} was added manually and has no QR. Update its status from Projects on the portal.`,
+        400,
+      )
+    }
+
     if (unit.currentStatus === 'SHIPPED') {
       throw new BusinessError(
         'PRODUCT_ALREADY_SHIPPED',
@@ -319,6 +327,14 @@ export class TransitsService {
         'PRODUCT_NOT_FOUND',
         'This QR code is not registered in AME Tracker.',
         404,
+      )
+    }
+
+    if (unit.item.isManual === 1) {
+      throw new BusinessError(
+        'MANUAL_ITEM_NO_SCAN',
+        `Piece #${unit.item.pieceNumber || unit.item.sourceItemId} was added manually and has no QR. Update its status from Projects on the portal.`,
+        400,
       )
     }
 

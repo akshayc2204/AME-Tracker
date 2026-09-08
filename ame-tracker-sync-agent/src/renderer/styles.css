@@ -1,0 +1,242 @@
+:root {
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --text: #1a2332;
+  --muted: #5c6b7a;
+  --border: #d8dee6;
+  --primary: #1f6feb;
+  --primary-text: #ffffff;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --err: #cf222e;
+  --radius: 10px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: linear-gradient(160deg, #e8eef5 0%, var(--bg) 40%, #eef2f6 100%);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 20px 8px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #e7ebf0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge.on {
+  background: #dafbe1;
+  color: var(--ok);
+}
+
+.main {
+  padding: 8px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.field input,
+.field select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text);
+  background: #fff;
+}
+
+.field.inline select {
+  min-width: 140px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn:hover { background: #f7f9fb; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+
+.btn.primary:hover { filter: brightness(1.05); }
+
+.path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 8px 10px;
+  background: #f7f9fb;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+}
+
+.msg.error { color: var(--err); }
+.msg.ok { color: var(--ok); }
+
+.status-label {
+  margin: 0;
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+
+.status-message {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stats div {
+  background: #f7f9fb;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+}
+
+.stats span {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.stats strong {
+  font-size: 1rem;
+}
+
+.pair-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.pair-list li {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+  font-size: 0.8rem;
+}
+
+.pair-list .name { font-weight: 650; }
+.pair-list .meta { color: var(--muted); margin-top: 2px; }
+
+.tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.tag.SYNCED { background: #dafbe1; color: var(--ok); }
+.tag.SKIPPED { background: #e7ebf0; color: var(--muted); }
+.tag.INCOMPLETE { background: #fff8c5; color: var(--warn); }
+.tag.FAILED { background: #ffebe9; color: var(--err); }

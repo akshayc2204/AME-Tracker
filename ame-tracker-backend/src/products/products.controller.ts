@@ -64,7 +64,13 @@ export class ProductsController {
   @Roles('ADMIN')
   async updateStatus(
     @Param('id') id: string,
-    @Body() body: { status?: string; vehicleNumber?: string; reason?: string; source?: string },
+    @Body() body: {
+      status?: string
+      vehicleNumber?: string
+      reason?: string
+      source?: string
+      dispatchId?: number | string
+    },
     @CurrentUser() user: AuthUser,
   ) {
     const newStatus = (body?.status || 'SHIPPED').trim().toUpperCase()
@@ -77,6 +83,7 @@ export class ProductsController {
         reason: body?.reason,
         source: body?.source || 'Dashboard',
         userName: user?.fullName || user?.name || user?.email || 'Admin',
+        dispatchId: body?.dispatchId != null ? Number(body.dispatchId) : undefined,
       },
     )
     return ok(updated, `Item status updated to ${newStatus}`)

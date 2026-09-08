@@ -121,6 +121,8 @@ model Item {
   inContainer          Int      @default(0) @map("in_container")
   /// First unit's IDItemTracking; kept for lookups that predate ItemUnit tracking ids.
   sourceItemTrackingId Int?     @map("source_item_tracking_id")
+  /// 1 = created from Projects portal (no physical QR; portal may set Active↔Shipped).
+  isManual             Int      @default(0) @map("is_manual")
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @default(now()) @updatedAt @map("updated_at")
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Package, ChevronRight, Smartphone, Monitor } from 'lucide-react';
+import { X, Package, ChevronRight, Smartphone, Monitor, Trash2, PenLine } from 'lucide-react';
 import type { Part, TrackingRecord, TrackingStatus } from '../data/mockData';
 import { api } from '../services/api';
 import { useApp } from '../store/AppContext';
@@ -11,6 +11,9 @@ interface Props {
   projectName?: string;
   jobName?: string;
   onRefresh?: () => Promise<void>;
+  onDeleteManual?: () => Promise<void>;
+  deletingManual?: boolean;
+  onManualShip?: (unitIds: number[]) => void;
 }
 
 function StatusBadge({ status }: { status: TrackingStatus }) {
@@ -51,14 +54,42 @@ function AdminStatusSelect({
   status,
   disabled,
   locked,
+  isManual,
   onSelect,
 }: {
   status: string;
   disabled?: boolean;
   locked?: boolean;
+  isManual?: boolean;
   onSelect: (status: string) => void;
 }) {
-  const isShipped = statusSelectValue(status) === 'SHIPPED';
+  const current = statusSelectValue(status);
+  const isShipped = current === 'SHIPPED';
+
+  if (isManual) {
+    if (locked && isShipped) {
+      return (
+        <span title={statusLockMessage()}>
+          <StatusBadge status="SHIPPED" />
+        </span>
+      );
+    }
+    return (
+      <select
+        className="form-select manual-status-select"
+        value={current}
+        disabled={disabled}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next === 'PENDING' || next === 'SHIPPED') onSelect(next);
+        }}
+      >
+        <option value="PENDING">Active</option>
+        <option value="SHIPPED">Shipped</option>
+      </select>
+    );
+  }
+
   if (!isShipped) {
     return (
       <span title="Scan on mobile to mark as shipped">
@@ -89,7 +120,16 @@ function AdminStatusSelect({
   );
 }
 
-export default function PartDrawer({ part, onClose, projectName, jobName, onRefresh }: Props) {
+export default function PartDrawer({
+  part,
+  onClose,
+  projectName,
+  jobName,
+  onRefresh,
+  onDeleteManual,
+  deletingManual,
+  onManualShip,
+}: Props) {
   const { currentUser } = useApp();
   const isAdmin = String(currentUser?.role || '').toUpperCase() === 'ADMIN';
   const [localPart, setLocalPart] = useState(part);
@@ -102,6 +142,10 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
   async function handleTrackingStatusChange(tr: TrackingRecord, newStatus: string) {
     const unitId = parseTrackingUnitId(tr.id);
     if (!unitId) return;
+    if (newStatus === 'SHIPPED' && localPart.isManual && onManualShip) {
+      onManualShip([unitId]);
+      return;
+    }
     setStatusUpdatingUnitId(unitId);
     try {
       await api.updateProductStatus(unitId, {
@@ -136,13 +180,32 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
       <div className="drawer">
         {/* Header */}
         <div className="drawer-header">
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--green-100)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Package size={18} color="var(--green-600)" />
+          <div style={{
+            width: 38,
+            height: 38,
+            borderRadius: 10,
+            background: localPart.isManual ? '#dbeafe' : 'var(--green-100)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            {localPart.isManual
+              ? <PenLine size={18} color="#1d4ed8" />
+              : <Package size={18} color="var(--green-600)" />}
           </div>
-          <div style={{ flex: 1 }}>
-            <div className="drawer-title">{String(localPart.schedule?.Item || localPart.fitting)} — #{String(localPart.pieceNbr)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="drawer-title" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <span>{String(localPart.schedule?.Item || localPart.fitting)} — #{String(localPart.pieceNbr)}</span>
+              {localPart.isManual && (
+                <span className="badge-manual">
+                  <PenLine size={8} strokeWidth={2.5} />
+                  Manual
+                </span>
+              )}
+            </div>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
               {projectName || 'AME Project'} / {jobName || `Job #${localPart.jobId}`}
+              {localPart.isManual ? ' · No QR — ship from portal' : ''}
             </div>
           </div>
           <button className="icon-btn" onClick={onClose}><X size={18} /></button>
@@ -158,7 +221,31 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
           {/* Manufacturing Details */}
           <div className="card">
             <div className="card-header" style={{ padding: '12px 16px' }}>
-              <div className="card-title" style={{ fontSize: 12 }}>Item</div>
+              <div className="card-title" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                Item details
+                {onDeleteManual && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={deletingManual}
+                    onClick={() => onDeleteManual()}
+                    style={{
+                      marginLeft: 'auto',
+                      color: '#dc2626',
+                      border: '1px solid #fecaca',
+                      background: '#fef2f2',
+                      fontWeight: 700,
+                      fontSize: 11,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <Trash2 size={12} />
+                    {deletingManual ? 'Deleting…' : 'Delete'}
+                  </button>
+                )}
+              </div>
             </div>
             <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
               {(localPart.schedule
@@ -171,7 +258,6 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
                     { l: 'Information', v: String(localPart.schedule.Information ?? localPart.information ?? '—') },
                     { l: 'Area', v: String(localPart.schedule.Area ?? localPart.area ?? '—') },
                     { l: 'Weight', v: String(localPart.schedule.Weight ?? localPart.weight ?? '—') },
-                    { l: 'Alpha number', v: String(localPart.schedule['Alpha number'] ?? localPart.schedule['Alpha #'] ?? '—') },
                     { l: 'Pressure', v: String(localPart.schedule.Pressure ?? '—') },
                     { l: 'Length', v: String(localPart.schedule.Length ?? '—') },
                     { l: 'Instructions', v: String(localPart.schedule.Instructions ?? '—') },
@@ -202,7 +288,9 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
           {/* Tracking Records */}
           <div className="card">
             <div className="card-header" style={{ padding: '12px 16px' }}>
-              <div className="card-title" style={{ fontSize: 12 }}>Registered Barcodes &amp; Tracking Identifiers</div>
+              <div className="card-title" style={{ fontSize: 12 }}>
+                {localPart.isManual ? 'Units & status' : 'Registered Barcodes & Tracking Identifiers'}
+              </div>
             </div>
             <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               {localPart.trackingRecords.map(tr => {
@@ -211,8 +299,8 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
                 <div key={tr.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                      <span className="td-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--green-700)', overflowWrap: 'anywhere' }}>
-                        {tr.qrCode}
+                      <span className="td-mono" style={{ fontSize: 12, fontWeight: 700, color: localPart.isManual ? 'var(--text-muted)' : 'var(--green-700)', overflowWrap: 'anywhere' }}>
+                        {localPart.isManual ? 'No QR (manual)' : tr.qrCode}
                       </span>
                     </div>
                     {isAdmin && unitId ? (
@@ -220,6 +308,7 @@ export default function PartDrawer({ part, onClose, projectName, jobName, onRefr
                         status={tr.status}
                         disabled={statusUpdatingUnitId === unitId}
                         locked={isStatusChangeLocked(tr.shippedAt || tr.trackingDateTime)}
+                        isManual={Boolean(localPart.isManual)}
                         onSelect={(newStatus) => handleTrackingStatusChange(tr, newStatus)}
                       />
                     ) : (

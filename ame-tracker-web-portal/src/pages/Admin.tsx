@@ -716,9 +716,10 @@ export default function Admin() {
               <FolderSync size={16} />
             </div>
             <div>
-              <div className="card-title">Job folder sync</div>
+              <div className="card-title">Server job folder sync</div>
               <div className="card-subtitle">
-                Matching <code>.t4vjob</code> and <code>.xlsx</code> files become projects automatically.
+                Watches a folder on the <strong>server</strong> for matching <code>.t4vjob</code> + <code>.xlsx</code> pairs.
+                For files on your PC, use the Sync Agent desktop app.
               </div>
             </div>
           </div>
@@ -776,7 +777,8 @@ export default function Admin() {
                 />
               </div>
               <div className="form-hint">
-                Full path on this computer. The folder is created if it does not exist.
+                Full path on the <strong>application server</strong> (or a share mounted there), not a folder on your laptop.
+                If job files live on your PC, use the <strong>AME Tracker Sync Agent</strong> desktop app instead — do not paste a local path here.
               </div>
             </div>
             <div className="form-group">

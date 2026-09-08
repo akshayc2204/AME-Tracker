@@ -134,6 +134,7 @@ export class ProductsService {
         id: String(item.id),
         jobId: String(item.jobId),
         sourceItemId: item.sourceItemId,
+        isManual: item.isManual === 1,
         values,
         status: rollupUnitStatus(item.units.map((u) => u.currentStatus)),
         trackingDateTime: timestamps.at(-1) ?? null,
@@ -159,7 +160,10 @@ export class ProductsService {
 
   async listTrackingExport(jobCode?: string) {
     const where: Record<string, unknown> = {
-      sourceItemTrackingId: { not: null },
+      OR: [
+        { sourceItemTrackingId: { not: null } },
+        { item: { isManual: 1 } },
+      ],
     }
     if (jobCode) {
       where.job = {
@@ -180,6 +184,7 @@ export class ProductsService {
             pieceNumber: true,
             fitting: true,
             instructions: true,
+            isManual: true,
           },
         },
         job: { select: { sourceJobId: true, jobName: true } },
@@ -198,6 +203,7 @@ export class ProductsService {
       itemId: String(unit.itemId),
       qrCode: unit.qrCode,
       status: unit.currentStatus,
+      isManual: unit.item.isManual === 1,
       trackingDateTime: latestUnitTimestamp(unit),
       values: unitToTrackingExportValues(unit),
     }))
@@ -277,7 +283,9 @@ export class ProductsService {
   }
 
   async listQrLabels(jobCode?: string) {
-    const where: Record<string, unknown> = {}
+    const where: Record<string, unknown> = {
+      item: { isManual: 0 },
+    }
     if (jobCode) {
       where.job = {
         OR: [
@@ -296,6 +304,7 @@ export class ProductsService {
             pieceNumber: true,
             fitting: true,
             sourceItemId: true,
+            isManual: true,
           },
         },
       },
@@ -307,7 +316,13 @@ export class ProductsService {
     id: string | number,
     status: string,
     userId?: number,
-    options?: { vehicleNumber?: string; reason?: string; source?: string; userName?: string },
+    options?: {
+      vehicleNumber?: string
+      reason?: string
+      source?: string
+      userName?: string
+      dispatchId?: number
+    },
   ) {
     const normalized = String(status || '').trim().toUpperCase()
     if (!ALLOWED_UNIT_STATUSES.has(normalized)) {
@@ -348,7 +363,8 @@ export class ProductsService {
     if (
       normalized === 'SHIPPED' &&
       this.isPortalStatusSource(source) &&
-      unit.currentStatus !== 'SHIPPED'
+      unit.currentStatus !== 'SHIPPED' &&
+      unit.item.isManual !== 1
     ) {
       throw new BadRequestException({
         errorCode: 'RESCAN_REQUIRED',
@@ -357,13 +373,66 @@ export class ProductsService {
       })
     }
 
+    let dispatch: {
+      id: number
+      vehicleNumber: string | null
+      status: string
+    } | null = null
+
+    if (
+      normalized === 'SHIPPED' &&
+      unit.item.isManual === 1 &&
+      this.isPortalStatusSource(source)
+    ) {
+      const dispatchId = options?.dispatchId != null ? Number(options.dispatchId) : NaN
+      if (!Number.isFinite(dispatchId) || dispatchId <= 0) {
+        throw new BadRequestException({
+          errorCode: 'DISPATCH_REQUIRED',
+          message:
+            'Select an active trolley/dispatch to ship this manual item so it stays on the load.',
+        })
+      }
+      dispatch = await this.prisma.dispatch.findUnique({
+        where: { id: dispatchId },
+        select: { id: true, vehicleNumber: true, status: true },
+      })
+      if (!dispatch) {
+        throw new NotFoundException({
+          errorCode: 'TRANSIT_NOT_FOUND',
+          message: 'Selected trolley/dispatch was not found',
+        })
+      }
+      if (dispatch.status !== 'OPEN') {
+        throw new BadRequestException({
+          errorCode: 'TRANSIT_NOT_ACTIVE',
+          message: 'Selected trolley is not active. Pick an open dispatch.',
+        })
+      }
+    }
+
     const now = new Date()
+    const vehicleNumber =
+      options?.vehicleNumber ||
+      dispatch?.vehicleNumber ||
+      (dispatch ? `Dispatch #${String(dispatch.id).padStart(4, '0')}` : '—')
+
     await this.prisma.$transaction(async (tx) => {
       // A part that is not SHIPPED cannot belong to a dispatch. Releasing on every
       // PENDING write (not just the SHIPPED -> PENDING edge) also repairs units that
       // an earlier failed revert left linked to a dispatch.
       if (normalized === 'PENDING') {
         await tx.dispatchPart.deleteMany({ where: { itemUnitId: unit.id } })
+      }
+
+      if (normalized === 'SHIPPED' && dispatch) {
+        await tx.dispatchPart.deleteMany({ where: { itemUnitId: unit.id } })
+        await tx.dispatchPart.create({
+          data: {
+            dispatchId: dispatch.id,
+            itemUnitId: unit.id,
+            loadedBy: userId || null,
+          },
+        })
       }
 
       await tx.itemUnit.update({
@@ -383,8 +452,9 @@ export class ProductsService {
           status: normalized,
           source,
           userId: userId || null,
-          vehicleNumber: options?.vehicleNumber || '—',
+          vehicleNumber,
           reason,
+          dispatchId: dispatch?.id ?? null,
         },
       })
     })
@@ -410,7 +480,7 @@ export class ProductsService {
       projectName: unit.job.project?.projectName || '—',
       jobName: unit.job.jobName || unit.job.sourceJobId,
       jobCode: unit.job.sourceJobId,
-      vehicleNumber: options?.vehicleNumber || '—',
+      vehicleNumber,
       status: normalized,
       source,
       userName: options?.userName || 'Operator',
@@ -503,6 +573,7 @@ export class ProductsService {
       trackingStatus: string | null
       statusSequence: number | null
       isFitting: number
+      isManual?: number
     }
     job: {
       id: number
@@ -595,6 +666,7 @@ export class ProductsService {
       sourceFlag: unit.guidInUse === 1,
       sourceFlagRaw: unit.guidInUse === 1 ? 'true' : 'false',
       hasSourceQr,
+      isManual: unit.item.isManual === 1,
       fabshopDownloadNo: unit.sourceQtyGuidId != null ? String(unit.sourceQtyGuidId) : '',
       qrCode: { code: unit.qrCode },
       qrCodeStr: unit.qrCode,

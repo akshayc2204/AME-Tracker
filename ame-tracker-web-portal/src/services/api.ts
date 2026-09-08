@@ -453,6 +453,54 @@ export const api = {
     ).data;
   },
 
+  async createManualJobItem(
+    jobId: number | string,
+    payload: {
+      pieceNumber: string;
+      fitting: string;
+      quantity?: number;
+      itemId?: number;
+      itemTrackingNo?: number;
+      metal?: string;
+      gauge?: number;
+      liner?: string;
+      dimensions?: string;
+      weight?: number;
+      area?: number;
+      drawing?: string;
+      floor?: string;
+      systemName?: string;
+      pressure?: string;
+      length?: string;
+    },
+  ) {
+    return (
+      await request<{
+        id: string;
+        jobId: string;
+        sourceItemId: number;
+        pieceNumber: string | null;
+        fitting: string | null;
+        quantity: number;
+        isManual: boolean;
+        status: string;
+        units: Array<{ id: string; unitIndex: number; qrCode: string; status: string }>;
+      }>(`/jobs/${jobId}/manual-items`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    ).data;
+  },
+
+  async deleteManualJobItem(jobId: number | string, itemId: number | string) {
+    return (
+      await request<{ id: string; jobId: string; deleted: boolean }>(
+        `/jobs/${jobId}/manual-items/${itemId}`,
+        { method: 'DELETE' },
+      )
+    ).data;
+  },
+
   async getJob(id: number | string) {
     return (await request<any>(`/jobs/${id}`)).data;
   },
@@ -494,6 +542,7 @@ export const api = {
           id: string;
           jobId: string;
           sourceItemId: number;
+          isManual?: boolean;
           values: Record<string, string | number | null>;
           status: string;
           trackingDateTime: string | null;
@@ -524,6 +573,7 @@ export const api = {
           itemId: string;
           qrCode: string;
           status: string;
+          isManual?: boolean;
           trackingDateTime: string | null;
           values: Record<string, string | number | boolean | null>;
         }>;
@@ -538,7 +588,14 @@ export const api = {
   },
 
   // Manual Tracking disabled for now — used only by ManualTrack.tsx
-  async updateProductStatus(id: string | number, payload: { status: string; qrCode?: string; vehicleNumber?: string; reason?: string; source?: string }) {
+  async updateProductStatus(id: string | number, payload: {
+    status: string;
+    qrCode?: string;
+    vehicleNumber?: string;
+    reason?: string;
+    source?: string;
+    dispatchId?: number | string;
+  }) {
     if (payload.qrCode) markItemAsPortalScanned(payload.qrCode);
     const res = await request<any>(`/products/${id}/status`, {
       method: 'POST',
@@ -646,12 +703,14 @@ export const api = {
   },
 
   // Dispatches / Transits
-  async getDispatches() {
+  async getDispatches(status?: string) {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
     return (
       await request<{
         items: Array<{
           id: number;
           transitNumber: string;
+          vehicleNumber?: string;
           status: string;
           truckPhotoUrl?: string;
           startedAt: string;
@@ -661,7 +720,7 @@ export const api = {
           projects?: string[];
           jobs?: string[];
         }>;
-      }>('/transits')
+      }>(`/transits${query}`)
     ).data;
   },
 
@@ -669,8 +728,13 @@ export const api = {
     return (await request<Array<any>>('/transits/grouped')).data;
   },
 
-  async createDispatch() {
-    return (await request<any>('/transits', { method: 'POST' })).data;
+  async createDispatch(vehicleNumber?: string) {
+    return (
+      await request<any>('/transits', {
+        method: 'POST',
+        body: JSON.stringify(vehicleNumber ? { vehicleNumber } : {}),
+      })
+    ).data;
   },
 
   async getDispatch(id: number | string) {

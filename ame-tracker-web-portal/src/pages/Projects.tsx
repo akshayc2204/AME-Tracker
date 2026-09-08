@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderKanban, Briefcase, Package, ChevronRight, ArrowLeft,
-  Search, ChevronUp, ChevronDown, X, CheckCircle, Clock, Tag, Trash2
+  Search, ChevronUp, ChevronDown, X, CheckCircle, Clock, Tag, Trash2, Plus, PenLine, Truck
 } from 'lucide-react';
 import type { Part, TrackingStatus } from '../data/mockData';
 import { api } from '../services/api';
@@ -23,7 +23,6 @@ const ITEM_SCHEDULE_HEADERS = [
   'Cost',
   'Hours',
   'Segmented',
-  'Alpha number',
   'Drawing',
   'Floor',
   'System',
@@ -95,7 +94,6 @@ function scheduleLookup(
     if (p && a && p === a) return p.replace(/[^\d].*$/, '') || p;
     return p ?? (a ? a.replace(/[^\d].*$/, '') || a : null);
   }
-  if (header === 'Alpha number') return values['Alpha number'] ?? values['Alpha #'];
   return values[header];
 }
 
@@ -166,6 +164,18 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`badge ${cls}`}><span className="badge-dot" />{label}</span>;
 }
 
+function ManualBadge({ title }: { title?: string }) {
+  return (
+    <span
+      className="badge-manual"
+      title={title || 'Added manually — no QR; ship from portal into a trolley'}
+    >
+      <PenLine size={8} strokeWidth={2.5} />
+      Manual
+    </span>
+  );
+}
+
 function statusSelectValue(status: string): 'PENDING' | 'SHIPPED' {
   return String(status || 'PENDING').toUpperCase() === 'SHIPPED' ? 'SHIPPED' : 'PENDING';
 }
@@ -179,14 +189,46 @@ function AdminStatusSelect({
   status,
   disabled,
   locked,
+  isManual,
   onSelect,
 }: {
   status: string;
   disabled?: boolean;
   locked?: boolean;
+  /** Manual (no-QR) items may be set Active↔Shipped from portal. */
+  isManual?: boolean;
   onSelect: (status: string) => void;
 }) {
-  const isShipped = statusSelectValue(status) === 'SHIPPED';
+  const current = statusSelectValue(status);
+  const isShipped = current === 'SHIPPED';
+
+  if (isManual) {
+    if (locked && isShipped) {
+      return (
+        <span title={statusLockMessage()}>
+          <StatusBadge status="SHIPPED" />
+        </span>
+      );
+    }
+    return (
+      <select
+        className="form-select manual-status-select"
+        value={current}
+        disabled={disabled}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          e.stopPropagation();
+          const next = e.target.value;
+          if (next === 'PENDING' || next === 'SHIPPED') onSelect(next);
+        }}
+      >
+        <option value="PENDING">Active</option>
+        <option value="SHIPPED">Shipped</option>
+      </select>
+    );
+  }
+
   if (!isShipped) {
     return (
       <span title="Scan on mobile to mark as shipped">
@@ -330,11 +372,51 @@ export default function Projects() {
     id: string;
     status: string;
     trackingDateTime: string | null;
+    isManual?: boolean;
     values: Record<string, string | number | boolean | null>;
   }>>([]);
 
   const [archivingJobId, setArchivingJobId] = useState<string | null>(null);
   const [statusUpdatingKey, setStatusUpdatingKey] = useState<string | null>(null);
+  const [deletingManualItemId, setDeletingManualItemId] = useState<string | null>(null);
+  const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [trolleyShip, setTrolleyShip] = useState<{
+    unitIds: number[];
+    label: string;
+  } | null>(null);
+  const [activeTrolleys, setActiveTrolleys] = useState<Array<{
+    id: number;
+    transitNumber: string;
+    status: string;
+    startedAt: string;
+    _count?: { transitProducts: number };
+  }>>([]);
+  const [trolleysLoading, setTrolleysLoading] = useState(false);
+  const [selectedTrolleyId, setSelectedTrolleyId] = useState<number | null>(null);
+  const [shippingToTrolley, setShippingToTrolley] = useState(false);
+  const [trolleyError, setTrolleyError] = useState<string | null>(null);
+  const [newTrolleyName, setNewTrolleyName] = useState('');
+  const [creatingTrolley, setCreatingTrolley] = useState(false);
+  const [addingItem, setAddingItem] = useState(false);
+  const [addItemError, setAddItemError] = useState<string | null>(null);
+  const [addItemForm, setAddItemForm] = useState({
+    pieceNumber: '',
+    fitting: '',
+    quantity: '1',
+    itemId: '',
+    itemTrackingNo: '',
+    metal: '',
+    gauge: '',
+    liner: '',
+    dimensions: '',
+    weight: '',
+    area: '',
+    drawing: '',
+    floor: '',
+    systemName: '',
+    pressure: '',
+    length: '',
+  });
 
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase();
@@ -375,6 +457,7 @@ export default function Projects() {
             weight: typeof values.Weight === 'number' ? values.Weight : undefined,
             status: (item.status || 'PENDING') as TrackingStatus,
             trackingDateTime: item.trackingDateTime || null,
+            isManual: Boolean(item.isManual),
             schedule: { ...values, ItemID: item.sourceItemId },
             trackingRecords: (item.trackingRecords || []).map((tr) => ({
               id: tr.id,
@@ -398,6 +481,7 @@ export default function Projects() {
           id: String(row.id),
           status: row.status || 'PENDING',
           trackingDateTime: row.trackingDateTime || null,
+          isManual: Boolean(row.isManual),
           values: row.values || {},
         })));
       }
@@ -416,8 +500,84 @@ export default function Projects() {
     }
   }
 
-  async function handleUnitStatusChange(unitId: number, newStatus: string) {
+  async function loadActiveTrolleys() {
+    setTrolleysLoading(true);
+    setTrolleyError(null);
+    try {
+      const res = await api.getDispatches('OPEN');
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setActiveTrolleys(items);
+      setSelectedTrolleyId(items[0]?.id ?? null);
+    } catch (err: unknown) {
+      setActiveTrolleys([]);
+      setSelectedTrolleyId(null);
+      setTrolleyError(err instanceof Error ? err.message : 'Could not load active trolleys');
+    } finally {
+      setTrolleysLoading(false);
+    }
+  }
+
+  function openManualShipPicker(unitIds: number[], label: string) {
+    if (!unitIds.length) return;
+    setTrolleyShip({ unitIds, label });
+    setNewTrolleyName('');
+    setTrolleyError(null);
+    loadActiveTrolleys();
+  }
+
+  async function handleCreateTrolley() {
+    if (creatingTrolley) return;
+    setCreatingTrolley(true);
+    setTrolleyError(null);
+    try {
+      const created = await api.createDispatch(newTrolleyName.trim() || undefined);
+      const id = Number(created?.id);
+      await loadActiveTrolleys();
+      if (Number.isFinite(id) && id > 0) setSelectedTrolleyId(id);
+      setNewTrolleyName('');
+    } catch (err: unknown) {
+      setTrolleyError(err instanceof Error ? err.message : 'Could not create trolley');
+    } finally {
+      setCreatingTrolley(false);
+    }
+  }
+
+  async function confirmShipToTrolley() {
+    if (!trolleyShip || !selectedTrolleyId || shippingToTrolley) return;
+    setShippingToTrolley(true);
+    setTrolleyError(null);
+    setStatusUpdatingKey(
+      trolleyShip.unitIds.length === 1
+        ? `unit-${trolleyShip.unitIds[0]}`
+        : `item-ship`,
+    );
+    try {
+      await Promise.all(
+        trolleyShip.unitIds.map((unitId) =>
+          api.updateProductStatus(unitId, {
+            status: 'SHIPPED',
+            source: 'Projects',
+            dispatchId: selectedTrolleyId,
+            reason: `Shipped to trolley #${selectedTrolleyId} from projects`,
+          }),
+        ),
+      );
+      setTrolleyShip(null);
+      await refreshJobParts();
+    } catch (err: unknown) {
+      setTrolleyError(err instanceof Error ? err.message : 'Could not ship to trolley');
+    } finally {
+      setShippingToTrolley(false);
+      setStatusUpdatingKey(null);
+    }
+  }
+
+  async function handleUnitStatusChange(unitId: number, newStatus: string, isManual?: boolean) {
     if (!unitId) return;
+    if (newStatus === 'SHIPPED' && isManual) {
+      openManualShipPicker([unitId], `Unit #${unitId}`);
+      return;
+    }
     setStatusUpdatingKey(`unit-${unitId}`);
     try {
       await api.updateProductStatus(unitId, {
@@ -438,6 +598,11 @@ export default function Projects() {
       .map((tr) => parseTrackingUnitId(tr.id))
       .filter((id): id is number => id != null);
     if (!unitIds.length) return;
+    if (newStatus === 'SHIPPED' && part.isManual) {
+      const label = String(part.schedule?.Item || part.fitting || part.pieceNbr || part.id);
+      openManualShipPicker(unitIds, label);
+      return;
+    }
     setStatusUpdatingKey(`item-${part.id}`);
     try {
       await Promise.all(
@@ -454,6 +619,98 @@ export default function Projects() {
       window.alert(err instanceof Error ? err.message : 'Could not update item status');
     } finally {
       setStatusUpdatingKey(null);
+    }
+  }
+
+  async function handleDeleteManualItem(part: Part) {
+    if (!selectedJob || !part.isManual || deletingManualItemId) return;
+    const label = String(part.schedule?.Item || part.fitting || part.pieceNbr || part.id);
+    if (!window.confirm(`Delete manual item “${label}”? This cannot be undone.`)) return;
+    setDeletingManualItemId(part.id);
+    try {
+      await api.deleteManualJobItem(selectedJob.id, part.id);
+      if (selectedPart?.id === part.id) setSelectedPart(null);
+      await refreshJobParts();
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Could not delete item');
+    } finally {
+      setDeletingManualItemId(null);
+    }
+  }
+
+  async function handleCreateManualItem() {
+    if (!selectedJob || addingItem) return;
+    const pieceNumber = addItemForm.pieceNumber.trim();
+    const fitting = addItemForm.fitting.trim();
+    if (!pieceNumber) {
+      setAddItemError('Piece number is required');
+      return;
+    }
+    if (!fitting) {
+      setAddItemError('Fitting / Item is required for reports');
+      return;
+    }
+    const quantity = Math.min(100, Math.max(1, Number(addItemForm.quantity) || 1));
+    const gaugeNum = addItemForm.gauge.trim() ? Number(addItemForm.gauge) : undefined;
+    const weightNum = addItemForm.weight.trim() ? Number(addItemForm.weight) : undefined;
+    const areaNum = addItemForm.area.trim() ? Number(addItemForm.area) : undefined;
+    const itemIdRaw = addItemForm.itemId.trim();
+    const itemId = itemIdRaw ? Number(itemIdRaw) : undefined;
+    if (itemIdRaw && !Number.isFinite(itemId)) {
+      setAddItemError('Item ID must be a number');
+      return;
+    }
+    const trackingRaw = addItemForm.itemTrackingNo.trim();
+    const itemTrackingNo = trackingRaw ? Number(trackingRaw) : undefined;
+    if (trackingRaw && (!Number.isFinite(itemTrackingNo) || (itemTrackingNo as number) < 1)) {
+      setAddItemError('Item Tracking No. must be a positive number');
+      return;
+    }
+    setAddingItem(true);
+    setAddItemError(null);
+    try {
+      await api.createManualJobItem(selectedJob.id, {
+        pieceNumber,
+        fitting,
+        quantity,
+        itemId: Number.isFinite(itemId as number) ? itemId : undefined,
+        itemTrackingNo: Number.isFinite(itemTrackingNo as number) ? itemTrackingNo : undefined,
+        metal: addItemForm.metal.trim() || undefined,
+        gauge: Number.isFinite(gaugeNum as number) ? gaugeNum : undefined,
+        liner: addItemForm.liner.trim() || undefined,
+        dimensions: addItemForm.dimensions.trim().replace(/(\d)\s*[xX*]\s*(?=\d)/g, '$1 × ') || undefined,
+        weight: Number.isFinite(weightNum as number) ? weightNum : undefined,
+        area: Number.isFinite(areaNum as number) ? areaNum : undefined,
+        drawing: addItemForm.drawing.trim() || undefined,
+        floor: addItemForm.floor.trim() || undefined,
+        systemName: addItemForm.systemName.trim() || undefined,
+        pressure: addItemForm.pressure.trim() || undefined,
+        length: addItemForm.length.trim() || undefined,
+      });
+      setShowAddItemModal(false);
+      setAddItemForm({
+        pieceNumber: '',
+        fitting: '',
+        quantity: '1',
+        itemId: '',
+        itemTrackingNo: '',
+        metal: '',
+        gauge: '',
+        liner: '',
+        dimensions: '',
+        weight: '',
+        area: '',
+        drawing: '',
+        floor: '',
+        systemName: '',
+        pressure: '',
+        length: '',
+      });
+      await refreshJobParts();
+    } catch (err: unknown) {
+      setAddItemError(err instanceof Error ? err.message : 'Could not add item');
+    } finally {
+      setAddingItem(false);
     }
   }
 
@@ -676,6 +933,26 @@ export default function Projects() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              {isAdmin && (
+                <button
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setAddItemError(null);
+                    setShowAddItemModal(true);
+                  }}
+                  style={{
+                    background: 'var(--green-600)',
+                    color: '#fff',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    boxShadow: '0 1px 2px rgba(7,135,16,0.25)',
+                  }}
+                >
+                  <Plus size={14} /> Add manual item
+                </button>
+              )}
               <span className={`badge badge-${selectedJob.status.toLowerCase()}`} style={{ fontSize: 12, padding: '5px 12px' }}>
                 {selectedJob.status === 'SHIPPED' ? 'Shipped' : 'Active'}
               </span>
@@ -800,28 +1077,60 @@ export default function Projects() {
                 </thead>
                 <tbody>
                   {paginatedParts.map(part => (
-                    <tr key={part.id} onClick={() => setSelectedPart(part)} style={{ cursor: 'pointer' }}>
+                    <tr
+                      key={part.id}
+                      onClick={() => setSelectedPart(part)}
+                      className={part.isManual ? 'row-manual' : undefined}
+                      style={{ cursor: 'pointer' }}
+                    >
                       {SCHEDULE_TABLE_HEADERS.map((header) => (
                         <td
                           key={header}
                           className={[
-                            header === 'ItemID' || header === 'Alpha number' ? 'td-mono' : '',
+                            header === 'ItemID' ? 'td-mono' : '',
                             header === DATETIME_HEADER ? datetimeCellClass(part.status || 'PENDING') : '',
                             header === 'Status' ? statusCellClass(part.status || 'PENDING') : '',
                           ].filter(Boolean).join(' ') || undefined}
                           title={header === 'Status' ? part.status || 'PENDING' : header === DATETIME_HEADER ? formatTimestamp(part.trackingDateTime) : scheduleCell(scheduleLookup(part.schedule, header))}
                         >
-                          {header === 'Status'
-                            ? isAdmin && part.trackingRecords.length > 0
-                              ? (
-                                <AdminStatusSelect
-                                  status={part.status || 'PENDING'}
-                                  disabled={statusUpdatingKey === `item-${part.id}`}
-                                  locked={isStatusChangeLocked(part.trackingDateTime)}
-                                  onSelect={(newStatus) => handleScheduleItemStatusChange(part, newStatus)}
-                                />
-                              )
-                              : <StatusBadge status={part.status || 'PENDING'} />
+                          {header === 'Item'
+                            ? (
+                              <div className="manual-item-cell">
+                                <span>{scheduleCell(scheduleLookup(part.schedule, header))}</span>
+                                {part.isManual && <ManualBadge />}
+                              </div>
+                            )
+                            : header === 'Status'
+                            ? (
+                              <div className="manual-status-actions">
+                                {isAdmin && part.trackingRecords.length > 0
+                                  ? (
+                                    <AdminStatusSelect
+                                      status={part.status || 'PENDING'}
+                                      disabled={statusUpdatingKey === `item-${part.id}`}
+                                      locked={isStatusChangeLocked(part.trackingDateTime)}
+                                      isManual={Boolean(part.isManual)}
+                                      onSelect={(newStatus) => handleScheduleItemStatusChange(part, newStatus)}
+                                    />
+                                  )
+                                  : <StatusBadge status={part.status || 'PENDING'} />}
+                                {isAdmin && part.isManual && (
+                                  <button
+                                    type="button"
+                                    className="manual-delete-btn"
+                                    title="Delete manual item"
+                                    disabled={deletingManualItemId === part.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteManualItem(part);
+                                    }}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                )}
+                              </div>
+                            )
                             : header === DATETIME_HEADER
                               ? formatTimestamp(part.trackingDateTime)
                               : scheduleCell(scheduleLookup(part.schedule, header))}
@@ -849,7 +1158,7 @@ export default function Projects() {
                 </thead>
                 <tbody>
                   {paginatedTracking.map(row => (
-                    <tr key={row.id}>
+                    <tr key={row.id} className={row.isManual ? 'row-manual' : undefined}>
                       {TRACKING_TABLE_HEADERS.map((header) => (
                         <td
                           key={header}
@@ -860,17 +1169,29 @@ export default function Projects() {
                           ].filter(Boolean).join(' ') || undefined}
                           title={header === 'Status' ? row.status : header === DATETIME_HEADER ? formatTimestamp(row.trackingDateTime) : trackingCell(header, row.values[header])}
                         >
-                          {header === 'Status'
-                            ? isAdmin
-                              ? (
-                                <AdminStatusSelect
-                                  status={row.status}
-                                  disabled={statusUpdatingKey === `unit-${row.id}`}
-                                  locked={isStatusChangeLocked(row.trackingDateTime)}
-                                  onSelect={(newStatus) => handleUnitStatusChange(Number(row.id), newStatus)}
-                                />
-                              )
-                              : <StatusBadge status={row.status} />
+                          {header === 'Fitting'
+                            ? (
+                              <div className="manual-item-cell">
+                                <span>{trackingCell(header, row.values[header])}</span>
+                                {row.isManual && <ManualBadge />}
+                              </div>
+                            )
+                            : header === 'Status'
+                            ? (
+                              <div className="manual-status-actions">
+                                {isAdmin
+                                  ? (
+                                    <AdminStatusSelect
+                                      status={row.status}
+                                      disabled={statusUpdatingKey === `unit-${row.id}`}
+                                      locked={isStatusChangeLocked(row.trackingDateTime)}
+                                      isManual={Boolean(row.isManual)}
+                                      onSelect={(newStatus) => handleUnitStatusChange(Number(row.id), newStatus, Boolean(row.isManual))}
+                                    />
+                                  )
+                                  : <StatusBadge status={row.status} />}
+                              </div>
+                            )
                             : header === DATETIME_HEADER
                               ? formatTimestamp(row.trackingDateTime)
                               : trackingCell(header, row.values[header])}
@@ -899,7 +1220,470 @@ export default function Projects() {
             projectName={selectedProject?.name}
             jobName={selectedJob?.jobName}
             onRefresh={refreshJobParts}
+            onManualShip={
+              isAdmin && selectedPart.isManual
+                ? (unitIds) => {
+                    const label = String(
+                      selectedPart.schedule?.Item || selectedPart.fitting || selectedPart.pieceNbr || selectedPart.id,
+                    );
+                    openManualShipPicker(unitIds, label);
+                  }
+                : undefined
+            }
+            onDeleteManual={
+              isAdmin && selectedPart.isManual
+                ? async () => {
+                    await handleDeleteManualItem(selectedPart);
+                  }
+                : undefined
+            }
+            deletingManual={deletingManualItemId === selectedPart.id}
           />
+        )}
+
+        {trolleyShip && (
+          <div
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !shippingToTrolley && !creatingTrolley) {
+                setTrolleyShip(null);
+              }
+            }}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 10001,
+              background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <div
+              style={{
+                background: '#FFFFFF', borderRadius: 16,
+                boxShadow: '0 25px 80px rgba(0,0,0,0.25)',
+                width: '100%', maxWidth: 460,
+                display: 'flex', flexDirection: 'column',
+              }}
+            >
+              <div style={{
+                padding: '18px 20px 14px',
+                borderBottom: '1px solid #F3F4F6',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div className="manual-modal-header-icon">
+                    <Truck size={16} color="#fff" />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800 }}>Ship to trolley</h3>
+                    <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>
+                      <strong>{trolleyShip.label}</strong> — choose an active dispatch
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !shippingToTrolley && !creatingTrolley && setTrolleyShip(null)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 6 }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {trolleyError && (
+                  <div style={{
+                    background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8,
+                    padding: '8px 12px', fontSize: 12, color: '#B91C1C',
+                  }}>
+                    {trolleyError}
+                  </div>
+                )}
+                {trolleysLoading ? (
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading active trolleys…</div>
+                ) : activeTrolleys.length === 0 ? (
+                  <div style={{
+                    fontSize: 13,
+                    color: 'var(--text-secondary)',
+                    background: '#f8fafc',
+                    border: '1px dashed #cbd5e1',
+                    borderRadius: 10,
+                    padding: '14px 12px',
+                    textAlign: 'center',
+                  }}>
+                    No active trolleys. Create one below, then ship.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
+                    {activeTrolleys.map((t) => (
+                      <label
+                        key={t.id}
+                        className={`trolley-option${selectedTrolleyId === t.id ? ' is-selected' : ''}`}
+                      >
+                        <input
+                          type="radio"
+                          name="trolley"
+                          checked={selectedTrolleyId === t.id}
+                          onChange={() => setSelectedTrolleyId(t.id)}
+                          disabled={shippingToTrolley}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{t.transitNumber}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            {t._count?.transitProducts ?? 0} parts · started{' '}
+                            {t.startedAt ? new Date(t.startedAt).toLocaleString() : '—'}
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                  <input
+                    className="form-input"
+                    value={newTrolleyName}
+                    onChange={(e) => setNewTrolleyName(e.target.value)}
+                    placeholder="New trolley / vehicle #"
+                    disabled={creatingTrolley || shippingToTrolley}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={creatingTrolley || shippingToTrolley}
+                    onClick={handleCreateTrolley}
+                    style={{ fontWeight: 700, whiteSpace: 'nowrap' }}
+                  >
+                    {creatingTrolley ? 'Creating…' : 'Create'}
+                  </button>
+                </div>
+              </div>
+              <div style={{
+                padding: '12px 20px 18px',
+                display: 'flex', justifyContent: 'flex-end', gap: 8,
+                borderTop: '1px solid #F3F4F6',
+              }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={shippingToTrolley || creatingTrolley}
+                  onClick={() => setTrolleyShip(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={!selectedTrolleyId || shippingToTrolley || creatingTrolley}
+                  onClick={confirmShipToTrolley}
+                  style={{ background: 'var(--green-600)', color: '#fff', fontWeight: 700 }}
+                >
+                  {shippingToTrolley ? 'Shipping…' : 'Ship to trolley'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showAddItemModal && (
+          <div
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !addingItem) {
+                setShowAddItemModal(false);
+              }
+            }}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 10000,
+              background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <div
+              style={{
+                background: '#FFFFFF', borderRadius: 16,
+                boxShadow: '0 25px 80px rgba(0,0,0,0.25)',
+                width: '100%', maxWidth: 520,
+                display: 'flex', flexDirection: 'column',
+              }}
+            >
+              <div style={{
+                padding: '18px 20px 14px',
+                borderBottom: '1px solid #F3F4F6',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div className="manual-modal-header-icon">
+                    <PenLine size={16} color="#fff" />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800 }}>Add manual item</h3>
+                    <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>
+                      No QR sticker — fill report fields, then ship into a trolley
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !addingItem && setShowAddItemModal(false)}
+                  style={{ background: 'none', border: 'none', cursor: addingItem ? 'not-allowed' : 'pointer', color: '#9CA3AF', padding: 6 }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '70vh', overflowY: 'auto' }}>
+                {addItemError && (
+                  <div style={{
+                    background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8,
+                    padding: '8px 12px', fontSize: 12, color: '#B91C1C',
+                  }}>
+                    {addItemError}
+                  </div>
+                )}
+
+                <div className="manual-form-section">
+                  <p className="manual-form-section-title">Identity</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <label className="manual-field">
+                      Piece #<span className="req">*</span>
+                      <input
+                        className="form-input"
+                        value={addItemForm.pieceNumber}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, pieceNumber: e.target.value }))}
+                        placeholder="e.g. M-101"
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Qty<span className="req">*</span>
+                      <input
+                        className="form-input"
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={addItemForm.quantity}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, quantity: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                  </div>
+                  <label className="manual-field">
+                    Fitting / Item<span className="req">*</span>
+                    <input
+                      className="form-input"
+                      value={addItemForm.fitting}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, fitting: e.target.value }))}
+                      placeholder="e.g. Elbow, Straight"
+                      disabled={addingItem}
+                    />
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <label className="manual-field">
+                      Item ID
+                      <input
+                        className="form-input"
+                        type="number"
+                        value={addItemForm.itemId}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, itemId: e.target.value }))}
+                        placeholder="e.g. 12045"
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Item Tracking No.
+                      <input
+                        className="form-input"
+                        type="number"
+                        min={1}
+                        value={addItemForm.itemTrackingNo}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, itemTrackingNo: e.target.value }))}
+                        placeholder="e.g. 4592865"
+                        disabled={addingItem}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="manual-form-section">
+                  <p className="manual-form-section-title">Specs</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <label className="manual-field">
+                      Metal
+                      <input
+                        className="form-input"
+                        value={addItemForm.metal}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, metal: e.target.value }))}
+                        placeholder="Thickness / type"
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Gauge
+                      <input
+                        className="form-input"
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={addItemForm.gauge}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, gauge: e.target.value }))}
+                        placeholder="e.g. 24"
+                        disabled={addingItem}
+                      />
+                    </label>
+                  </div>
+                  <label className="manual-field">
+                    Liner and Insulation
+                    <input
+                      className="form-input"
+                      value={addItemForm.liner}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, liner: e.target.value }))}
+                      placeholder="Optional"
+                      disabled={addingItem}
+                    />
+                  </label>
+                  <label className="manual-field">
+                    Dimensions / Information
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input
+                        className="form-input"
+                        value={addItemForm.dimensions}
+                        onChange={(e) => {
+                          const next = e.target.value.replace(/(\d)\s*[xX*]\s*(?=\d)/g, '$1 × ');
+                          setAddItemForm((f) => ({ ...f, dimensions: next }));
+                        }}
+                        placeholder="e.g. 600 × 400 × 500"
+                        disabled={addingItem}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        title="Insert ×"
+                        disabled={addingItem}
+                        onClick={() => {
+                          setAddItemForm((f) => ({
+                            ...f,
+                            dimensions: f.dimensions.trim()
+                              ? `${f.dimensions.trim()} × `
+                              : '',
+                          }));
+                        }}
+                        style={{
+                          flexShrink: 0,
+                          minWidth: 40,
+                          fontWeight: 800,
+                          fontSize: 16,
+                          lineHeight: 1,
+                          padding: '6px 10px',
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                    <label className="manual-field">
+                      Weight (kg)
+                      <input
+                        className="form-input"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={addItemForm.weight}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, weight: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Area
+                      <input
+                        className="form-input"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={addItemForm.area}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, area: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Length
+                      <input
+                        className="form-input"
+                        value={addItemForm.length}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, length: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="manual-form-section">
+                  <p className="manual-form-section-title">Location / system</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <label className="manual-field">
+                      Drawing
+                      <input
+                        className="form-input"
+                        value={addItemForm.drawing}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, drawing: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Floor
+                      <input
+                        className="form-input"
+                        value={addItemForm.floor}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, floor: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      System
+                      <input
+                        className="form-input"
+                        value={addItemForm.systemName}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, systemName: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                    <label className="manual-field">
+                      Pressure
+                      <input
+                        className="form-input"
+                        value={addItemForm.pressure}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, pressure: e.target.value }))}
+                        disabled={addingItem}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+              <div style={{
+                padding: '12px 20px 18px',
+                display: 'flex', justifyContent: 'flex-end', gap: 8,
+                borderTop: '1px solid #F3F4F6',
+              }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={addingItem}
+                  onClick={() => setShowAddItemModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={addingItem}
+                  onClick={handleCreateManualItem}
+                  style={{ background: 'var(--green-600)', color: '#fff', fontWeight: 700 }}
+                >
+                  {addingItem ? 'Adding…' : 'Add item'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     );

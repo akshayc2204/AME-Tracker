@@ -1,5 +1,11 @@
 import { Prisma } from '@prisma/client'
-import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common'
+import { createHash } from 'crypto'
 import { PrismaService } from '../prisma/prisma.service'
 import { AuditService } from '../audit/audit.service'
 import {
@@ -12,7 +18,20 @@ import type { FabshopParseResult } from './parsers/fabshop.parser'
 import { parseJobReport, type JobReportParseResult } from './parsers/job-report.parser'
 import { combineItemSchedule, type CombinedScheduleRow } from './join-schedule'
 import { readFile } from 'fs/promises'
-import { basename } from 'path'
+import { basename, extname } from 'path'
+
+export type AgentUploadStatus = 'SYNCED' | 'SKIPPED' | 'FAILED'
+
+export interface AgentUploadResult {
+  status: AgentUploadStatus
+  pairKey: string
+  sourceJobId: string | null
+  jobName: string | null
+  itemsImported: number
+  unitsImported: number
+  message: string
+  importBatchId?: number
+}
 
 @Injectable()
 export class ImportsService {
@@ -51,11 +70,366 @@ export class ImportsService {
     )
   }
 
+  /**
+   * Import a paired .t4vjob + Item Schedule upload from the desktop sync agent.
+   * Dedups by content hash (FileSync) and by existing job data.
+   */
+  async importFromUploadPair(
+    user: AuthUser,
+    files: {
+      t4vjobBuffer: Buffer
+      xlsxBuffer: Buffer
+      t4vjobFilename: string
+      xlsxFilename: string
+    },
+  ): Promise<AgentUploadResult> {
+    const t4vjobName = basename(files.t4vjobFilename)
+    const xlsxName = basename(files.xlsxFilename)
+    const t4Ext = extname(t4vjobName).toLowerCase()
+    const xlsxExt = extname(xlsxName).toLowerCase()
+
+    if (t4Ext !== '.t4vjob') {
+      throw new BadRequestException({
+        errorCode: 'INVALID_UPLOAD',
+        message: 't4vjob file must have a .t4vjob extension',
+      })
+    }
+    if (xlsxExt !== '.xlsx' && xlsxExt !== '.xls') {
+      throw new BadRequestException({
+        errorCode: 'INVALID_UPLOAD',
+        message: 'Item schedule file must be .xlsx or .xls',
+      })
+    }
+
+    const pairKeyT4 = basename(t4vjobName, t4Ext)
+    const pairKeyXlsx = basename(xlsxName, xlsxExt)
+    if (pairKeyT4 !== pairKeyXlsx) {
+      throw new BadRequestException({
+        errorCode: 'PAIR_MISMATCH',
+        message: `File basenames must match (got "${pairKeyT4}" and "${pairKeyXlsx}")`,
+      })
+    }
+    const pairKey = pairKeyT4
+
+    const t4vjobHash = createHash('sha256').update(files.t4vjobBuffer).digest('hex')
+    const xlsxHash = createHash('sha256').update(files.xlsxBuffer).digest('hex')
+    const t4vjobPath = `agent-sync://${t4vjobName}`
+    const xlsxPath = `agent-sync://${xlsxName}`
+
+    const vjobText = files.t4vjobBuffer.toString('utf8')
+    const parsed = this.peekVjobHeader(vjobText)
+    const sourceJobId = parsed.header.jobId || parsed.header.jobCode || null
+    const jobName = parsed.header.jobName || null
+
+    const prior = await this.prisma.fileSync.findUnique({
+      where: {
+        pairKey_t4vjobHash_xlsxHash: {
+          pairKey,
+          t4vjobHash,
+          xlsxHash,
+        },
+      },
+    })
+
+    const alreadyInDb = sourceJobId
+      ? await this.jobAlreadyImported(sourceJobId)
+      : false
+    const needsTrackingExport = sourceJobId
+      ? await this.jobMissingTrackingExport(sourceJobId)
+      : false
+
+    if (prior?.status === 'SYNCED' && !needsTrackingExport) {
+      return {
+        status: 'SKIPPED',
+        pairKey,
+        sourceJobId: prior.sourceJobId ?? sourceJobId,
+        jobName,
+        itemsImported: prior.itemsImported,
+        unitsImported: prior.unitsImported,
+        message: prior.message || 'Already synced — data already present',
+      }
+    }
+
+    if (alreadyInDb && !needsTrackingExport) {
+      const record = await this.prisma.fileSync.upsert({
+        where: {
+          pairKey_t4vjobHash_xlsxHash: {
+            pairKey,
+            t4vjobHash,
+            xlsxHash,
+          },
+        },
+        create: {
+          pairKey,
+          t4vjobPath,
+          xlsxPath,
+          t4vjobHash,
+          xlsxHash,
+          sourceJobId,
+          status: 'SKIPPED',
+          message: 'Job data already present in the item schedule table',
+        },
+        update: {
+          status: prior?.status === 'SYNCED' ? prior.status : 'SKIPPED',
+          message:
+            prior?.status === 'SYNCED'
+              ? prior.message
+              : 'Job data already present in the item schedule table',
+          t4vjobPath,
+          xlsxPath,
+        },
+      })
+      return {
+        status: 'SKIPPED',
+        pairKey,
+        sourceJobId: record.sourceJobId ?? sourceJobId,
+        jobName,
+        itemsImported: record.itemsImported,
+        unitsImported: record.unitsImported,
+        message: record.message || 'Job data already present',
+      }
+    }
+
+    try {
+      const vjobResult = parseVjob(vjobText)
+      const reportResult = await parseJobReport(files.xlsxBuffer)
+
+      const batch = await this.prisma.importBatch.create({
+        data: {
+          status: 'SYNCING',
+          t4vjobFilename: t4vjobPath,
+          jobReportFilename: xlsxPath,
+          uploadedBy: Number(user.id),
+        },
+      })
+
+      const imported = await this.commitParsed(
+        batch.id,
+        user,
+        { vjobResult, reportResult, fabResult: null },
+        t4vjobName,
+      )
+      const summary = imported.summary
+
+      const record = await this.prisma.fileSync.upsert({
+        where: {
+          pairKey_t4vjobHash_xlsxHash: {
+            pairKey,
+            t4vjobHash,
+            xlsxHash,
+          },
+        },
+        create: {
+          pairKey,
+          t4vjobPath,
+          xlsxPath,
+          t4vjobHash,
+          xlsxHash,
+          sourceJobId: summary.jobCode,
+          jobId: summary.jobId,
+          importBatchId: summary.batchId,
+          status: 'SYNCED',
+          itemsImported: summary.itemsImported,
+          unitsImported: summary.unitsImported,
+          message: `Imported ${summary.itemsImported} item schedule rows / ${summary.unitsImported} pieces`,
+        },
+        update: {
+          status: 'SYNCED',
+          sourceJobId: summary.jobCode,
+          jobId: summary.jobId,
+          importBatchId: summary.batchId,
+          itemsImported: summary.itemsImported,
+          unitsImported: summary.unitsImported,
+          message: `Imported ${summary.itemsImported} item schedule rows / ${summary.unitsImported} pieces`,
+          t4vjobPath,
+          xlsxPath,
+        },
+      })
+
+      await this.audit.log({
+        userId: Number(user.id),
+        action: 'AGENT_SYNC_IMPORTED',
+        entityType: 'FileSync',
+        entityId: String(record.id),
+        metadata: {
+          pairKey,
+          jobCode: summary.jobCode,
+          itemsImported: summary.itemsImported,
+          unitsImported: summary.unitsImported,
+        },
+      })
+
+      return {
+        status: 'SYNCED',
+        pairKey,
+        sourceJobId: summary.jobCode,
+        jobName: summary.jobName,
+        itemsImported: summary.itemsImported,
+        unitsImported: summary.unitsImported,
+        message: record.message || 'Imported',
+        importBatchId: summary.batchId,
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Agent upload failed for ${pairKey}: ${message}`)
+      await this.prisma.fileSync.upsert({
+        where: {
+          pairKey_t4vjobHash_xlsxHash: {
+            pairKey,
+            t4vjobHash,
+            xlsxHash,
+          },
+        },
+        create: {
+          pairKey,
+          t4vjobPath,
+          xlsxPath,
+          t4vjobHash,
+          xlsxHash,
+          sourceJobId,
+          status: 'FAILED',
+          message,
+        },
+        update: {
+          status: 'FAILED',
+          message,
+          t4vjobPath,
+          xlsxPath,
+          sourceJobId,
+        },
+      })
+      return {
+        status: 'FAILED',
+        pairKey,
+        sourceJobId,
+        jobName,
+        itemsImported: 0,
+        unitsImported: 0,
+        message,
+      }
+    }
+  }
+
   async jobAlreadyImported(sourceJobId: string): Promise<boolean> {
     const job = await findJobBySourceJobId(this.prisma, sourceJobId)
     if (!job) return false
     const count = await this.prisma.item.count({ where: { jobId: job.id } })
     return count > 0
+  }
+
+  /**
+   * Lightweight pre-check for the desktop sync agent — no file upload needed.
+   * Skip when this exact pair hash was already synced, or the job already has items
+   * (unless tracking-export columns are still missing).
+   */
+  async checkUploadPair(input: {
+    pairKey: string
+    t4vjobHash: string
+    xlsxHash: string
+    sourceJobId?: string | null
+  }): Promise<{
+    shouldSkip: boolean
+    reason: 'HASH_SYNCED' | 'JOB_IN_DB' | 'NEEDS_IMPORT' | 'NEEDS_TRACKING_EXPORT'
+    sourceJobId: string | null
+    message: string
+    itemsImported: number
+    unitsImported: number
+  }> {
+    const pairKey = input.pairKey.trim()
+    const sourceJobId = input.sourceJobId?.trim() || null
+
+    const prior = await this.prisma.fileSync.findUnique({
+      where: {
+        pairKey_t4vjobHash_xlsxHash: {
+          pairKey,
+          t4vjobHash: input.t4vjobHash,
+          xlsxHash: input.xlsxHash,
+        },
+      },
+    })
+
+    const needsTrackingExport = sourceJobId
+      ? await this.jobMissingTrackingExport(sourceJobId)
+      : false
+
+    if (prior?.status === 'SYNCED' && !needsTrackingExport) {
+      return {
+        shouldSkip: true,
+        reason: 'HASH_SYNCED',
+        sourceJobId: prior.sourceJobId ?? sourceJobId,
+        message: prior.message || 'Already synced — same files already in database',
+        itemsImported: prior.itemsImported,
+        unitsImported: prior.unitsImported,
+      }
+    }
+
+    if (sourceJobId) {
+      const alreadyInDb = await this.jobAlreadyImported(sourceJobId)
+      if (alreadyInDb && !needsTrackingExport) {
+        await this.prisma.fileSync.upsert({
+          where: {
+            pairKey_t4vjobHash_xlsxHash: {
+              pairKey,
+              t4vjobHash: input.t4vjobHash,
+              xlsxHash: input.xlsxHash,
+            },
+          },
+          create: {
+            pairKey,
+            t4vjobPath: `agent-sync://${pairKey}.t4vjob`,
+            xlsxPath: `agent-sync://${pairKey}.xlsx`,
+            t4vjobHash: input.t4vjobHash,
+            xlsxHash: input.xlsxHash,
+            sourceJobId,
+            status: 'SKIPPED',
+            message: 'Job data already present in the database — upload skipped',
+          },
+          update: {
+            status: 'SKIPPED',
+            sourceJobId,
+            message: 'Job data already present in the database — upload skipped',
+          },
+        })
+        return {
+          shouldSkip: true,
+          reason: 'JOB_IN_DB',
+          sourceJobId,
+          message: 'Job data already present in the database — upload skipped',
+          itemsImported: prior?.itemsImported ?? 0,
+          unitsImported: prior?.unitsImported ?? 0,
+        }
+      }
+      if (alreadyInDb && needsTrackingExport) {
+        return {
+          shouldSkip: false,
+          reason: 'NEEDS_TRACKING_EXPORT',
+          sourceJobId,
+          message: 'Job exists but tracking export columns are missing — upload needed',
+          itemsImported: 0,
+          unitsImported: 0,
+        }
+      }
+    }
+
+    if (prior?.status === 'SKIPPED' && !needsTrackingExport) {
+      return {
+        shouldSkip: true,
+        reason: 'JOB_IN_DB',
+        sourceJobId: prior.sourceJobId ?? sourceJobId,
+        message: prior.message || 'Previously skipped — job already in database',
+        itemsImported: prior.itemsImported,
+        unitsImported: prior.unitsImported,
+      }
+    }
+
+    return {
+      shouldSkip: false,
+      reason: 'NEEDS_IMPORT',
+      sourceJobId,
+      message: 'Pair not in database — upload needed',
+      itemsImported: 0,
+      unitsImported: 0,
+    }
   }
 
   /** True when the job is in the DB but Tracking Export columns were never written. */
@@ -423,27 +797,37 @@ export class ImportsService {
     const mapped = batches.map((b) => {
       const isDbSync = b.t4vjobFilename?.startsWith('fabshop-sync://') ?? false
       const isFolderSync = b.t4vjobFilename?.startsWith('folder-sync://') ?? false
+      const isAgentSync = b.t4vjobFilename?.startsWith('agent-sync://') ?? false
       const idJobMatch = isDbSync ? b.t4vjobFilename?.match(/IDJob=(\d+)/) : null
       const fileBasenames = [b.t4vjobFilename, b.fabshopFilename, b.jobReportFilename]
         .filter(Boolean)
-        .map((f) => f!.split(/[/\\]/).pop()!.replace(/^folder-sync:\/\//, ''))
+        .map((f) =>
+          f!
+            .split(/[/\\]/)
+            .pop()!
+            .replace(/^(folder-sync|agent-sync):\/\//, ''),
+        )
 
       return {
         id: b.id,
         status: b.status,
         sourceType: isFolderSync
           ? ('FOLDER' as const)
-          : isDbSync
-            ? ('SYNC' as const)
-            : ('UPLOAD' as const),
+          : isAgentSync
+            ? ('AGENT' as const)
+            : isDbSync
+              ? ('SYNC' as const)
+              : ('UPLOAD' as const),
         jobName: b.job?.jobName ?? null,
         projectName: b.job?.project?.projectName ?? null,
         jobCodeHint: b.job?.sourceJobId ?? idJobMatch?.[1] ?? null,
         sourceLabel: isFolderSync
           ? fileBasenames.join(' + ') || 'Folder sync'
-          : isDbSync
-            ? `Trimble Job ${idJobMatch?.[1] ?? b.job?.sourceJobId ?? '—'}`
-            : fileBasenames.join(' + ') || 'File upload',
+          : isAgentSync
+            ? fileBasenames.join(' + ') || 'Sync agent'
+            : isDbSync
+              ? `Trimble Job ${idJobMatch?.[1] ?? b.job?.sourceJobId ?? '—'}`
+              : fileBasenames.join(' + ') || 'File upload',
         t4vjobFilename: b.t4vjobFilename,
         fabshopFilename: b.fabshopFilename,
         jobReportFilename: b.jobReportFilename,
@@ -460,6 +844,7 @@ export class ImportsService {
     if (want === 'upload') return mapped.filter((b) => b.sourceType === 'UPLOAD')
     if (want === 'sync') return mapped.filter((b) => b.sourceType === 'SYNC')
     if (want === 'folder') return mapped.filter((b) => b.sourceType === 'FOLDER')
+    if (want === 'agent') return mapped.filter((b) => b.sourceType === 'AGENT')
     return mapped
   }
 

@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `items` ADD COLUMN `is_manual` INTEGER NOT NULL DEFAULT 0;

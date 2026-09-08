@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>AME Tracker Sync Agent</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>AME Tracker Sync Agent</h1>
+      <p class="subtitle">Watches a folder on this PC and uploads job pairs to the server</p>
+    </div>
+    <span id="connBadge" class="badge">Offline</span>
+  </header>
+
+  <main class="main">
+    <section class="card" id="loginCard">
+      <h2>Server &amp; login</h2>
+      <label class="field">
+        <span>API URL</span>
+        <input id="apiUrl" type="url" placeholder="http://localhost:3000" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Admin email</span>
+        <input id="email" type="email" autocomplete="username" />
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input id="password" type="password" autocomplete="current-password" />
+      </label>
+      <div class="row">
+        <button id="loginBtn" class="btn primary" type="button">Log in</button>
+        <button id="logoutBtn" class="btn" type="button" hidden>Log out</button>
+      </div>
+      <p id="loginMsg" class="msg" hidden></p>
+    </section>
+
+    <section class="card" id="folderCard">
+      <h2>Local folder</h2>
+      <p class="hint">Choose the folder on <strong>this computer</strong> that contains .t4vjob + .xlsx pairs. Do not set this path in the web portal.</p>
+      <div class="path-row">
+        <code id="folderPath" class="path">No folder selected</code>
+        <button id="pickFolderBtn" class="btn" type="button">Choose folder</button>
+      </div>
+      <label class="field inline">
+        <span>Check every</span>
+        <select id="intervalMinutes">
+          <option value="1">1 minute</option>
+          <option value="2" selected>2 minutes</option>
+          <option value="5">5 minutes</option>
+          <option value="10">10 minutes</option>
+          <option value="15">15 minutes</option>
+        </select>
+      </label>
+      <div class="row">
+        <button id="saveBtn" class="btn" type="button">Save settings</button>
+        <button id="syncBtn" class="btn primary" type="button">Sync now</button>
+      </div>
+      <p id="settingsMsg" class="msg" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2>Status</h2>
+      <p id="statusLabel" class="status-label">Idle</p>
+      <p id="statusMessage" class="status-message">Log in and choose a folder to begin.</p>
+      <div class="stats" id="stats" hidden>
+        <div><span>Imported</span><strong id="statImported">0</strong></div>
+        <div><span>Skipped</span><strong id="statSkipped">0</strong></div>
+        <div><span>Incomplete</span><strong id="statIncomplete">0</strong></div>
+        <div><span>Failed</span><strong id="statFailed">0</strong></div>
+      </div>
+      <ul id="pairList" class="pair-list"></ul>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

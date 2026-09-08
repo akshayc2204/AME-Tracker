@@ -55,6 +55,8 @@ export interface Part {
   status?: TrackingStatus;
   trackingDateTime?: string | null;
   shippedAt?: string | null;
+  /** Portal-created item with no physical QR; portal may set Active↔Shipped. */
+  isManual?: boolean;
   trackEvent?: 'Mobile scan' | 'Portal scan' | string | null;
   scanEvent?: string | null;
   lastEvent?: any;
