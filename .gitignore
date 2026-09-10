@@ -59,3 +59,13 @@ ame-tracker-mobile/ios/
 
 # Cursor / local tooling
 .cursor/
+
+# Binary installers & large build artifacts (too large for Git — host separately)
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+ame-tracker-backend/downloads/*.exe
+ame-tracker-backend/downloads/*.msi
