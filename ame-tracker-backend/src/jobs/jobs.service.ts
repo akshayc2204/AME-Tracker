@@ -97,9 +97,13 @@ export class JobsService {
         await tx.importBatch.deleteMany({ where: { jobId: job.id } })
       }
 
-      await tx.fileSync.updateMany({
-        where: { jobId: job.id },
-        data: { jobId: null },
+      await tx.fileSync.deleteMany({
+        where: {
+          OR: [
+            { jobId: job.id },
+            { sourceJobId: job.sourceJobId },
+          ],
+        },
       })
 
       const created = await tx.jobArchive.create({

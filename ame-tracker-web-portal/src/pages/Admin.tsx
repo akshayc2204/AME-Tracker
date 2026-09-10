@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import {
-  FolderSync, RefreshCw, Save, FolderOpen, CheckCircle, User, Pencil,
-  AlertCircle, Archive, Smartphone, Plus, X, ChevronDown,
+  Upload, RefreshCw, FolderOpen, CheckCircle, User, Pencil,
+  AlertCircle, Archive, Smartphone, Plus, X, ChevronDown, Download, Monitor, Save,
 } from 'lucide-react';
-import { useApp } from '../store/AppContext';
+
 import { api } from '../services/api';
+import { useApp } from '../store/AppContext';
 import {
-  FOLDER_PATH_HINT,
-  FOLDER_PATH_PLACEHOLDER,
-  isAbsoluteFolderPath,
-} from '../utils/pathUtils';
+  pickFolderFromDisk,
+  processAndUploadFolder,
+  type LocalFolderPair,
+  type FolderUploadProgress,
+  type FolderUploadResult,
+} from '../utils/browserFolderSync';
 
 type PortalUser = {
   id: number;
@@ -19,45 +22,6 @@ type PortalUser = {
   isActive: number;
   createdAt?: string;
 };
-
-type FolderPair = {
-  pairKey: string;
-  t4vjobFile: string | null;
-  xlsxFile: string | null;
-  sourceJobId: string | null;
-  jobName: string | null;
-  status: 'PENDING' | 'SYNCED' | 'SKIPPED' | 'FAILED' | 'INCOMPLETE';
-  itemsImported: number;
-  unitsImported: number;
-  message: string | null;
-  lastSyncedAt: string | null;
-};
-
-type FolderSyncStatus = {
-  enabled: boolean;
-  folderPath: string;
-  intervalMinutes: number;
-  running: boolean;
-  lastRun: {
-    imported: number;
-    skipped: number;
-    failed: number;
-    incomplete: number;
-    finishedAt: string;
-  } | null;
-  pairs: FolderPair[];
-  error?: string;
-};
-
-const INTERVAL_OPTIONS = [
-  { value: 1, label: 'Every 1 minute' },
-  { value: 2, label: 'Every 2 minutes' },
-  { value: 5, label: 'Every 5 minutes' },
-  { value: 10, label: 'Every 10 minutes' },
-  { value: 15, label: 'Every 15 minutes' },
-  { value: 30, label: 'Every 30 minutes' },
-  { value: 60, label: 'Every hour' },
-];
 
 function folderBadgeClass(status: string): string {
   const s = status.toUpperCase();
@@ -89,20 +53,6 @@ function formatDateTime(value?: string | null): string {
   });
 }
 
-function formatRelative(value?: string | null): string {
-  if (!value) return 'Never';
-  const diffMs = Date.now() - new Date(value).getTime();
-  if (Number.isNaN(diffMs)) return formatDateTime(value);
-  const mins = Math.round(diffMs / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins === 1) return '1 minute ago';
-  if (mins < 60) return `${mins} minutes ago`;
-  const hours = Math.round(mins / 60);
-  if (hours === 1) return '1 hour ago';
-  if (hours < 24) return `${hours} hours ago`;
-  return formatDateTime(value);
-}
-
 function Message({ type, text }: { type: 'error' | 'success'; text: string }) {
   const isError = type === 'error';
   return (
@@ -128,13 +78,11 @@ export default function Admin() {
   const [fullName, setFullName] = useState(currentUser.name || '');
   const [newPassword, setNewPassword] = useState('');
   const [editingProfile, setEditingProfile] = useState(false);
-  const [folderStatus, setFolderStatus] = useState<FolderSyncStatus | null>(null);
-  const [folderPath, setFolderPath] = useState('');
-  const [intervalMinutes, setIntervalMinutes] = useState(5);
-  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<FolderUploadProgress | null>(null);
+  const [uploadSummary, setUploadSummary] = useState<FolderUploadResult | null>(null);
+  const [folderPairs, setFolderPairs] = useState<LocalFolderPair[]>([]);
   const [savingProfile, setSavingProfile] = useState(false);
-  const [savingFolder, setSavingFolder] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [folderMsg, setFolderMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [archivedJobs, setArchivedJobs] = useState<Array<{
@@ -159,6 +107,15 @@ export default function Admin() {
   const [opName, setOpName] = useState('');
   const [opEmail, setOpEmail] = useState('');
   const [opPassword, setOpPassword] = useState('');
+  const [syncAgentInfo, setSyncAgentInfo] = useState<{
+    available: boolean;
+    filename: string;
+    sizeBytes: number | null;
+    downloadUrl: string | null;
+    instructions: string[];
+  } | null>(null);
+  const [syncAgentLoading, setSyncAgentLoading] = useState(true);
+
 
   function applyUser(user: { fullName?: string; email?: string }) {
     const name = (user.fullName || '').trim() || fullName.trim();
@@ -200,21 +157,14 @@ export default function Admin() {
   }
 
   async function load() {
-    setLoading(true);
     setArchivesLoading(true);
     try {
-      const [me, status, archives] = await Promise.all([
+      const [me, archives] = await Promise.all([
         api.getMe().catch(() => null),
-        api.getFolderSyncStatus().catch(() => null),
         api.getJobArchives().catch(() => []),
         loadOperators(),
       ]);
       if (me) applyUser(me);
-      if (status) {
-        setFolderStatus(status);
-        setFolderPath(status.folderPath || '');
-        setIntervalMinutes(status.intervalMinutes || 5);
-      }
       if (Array.isArray(archives)) setArchivedJobs(archives);
     } catch (err: unknown) {
       setFolderMsg({
@@ -222,15 +172,21 @@ export default function Admin() {
         text: err instanceof Error ? err.message : 'Could not load admin settings',
       });
     } finally {
-      setLoading(false);
       setArchivesLoading(false);
     }
   }
 
   useEffect(() => {
     void load();
+    // Load sync agent download info (separate so it doesn't block the rest)
+    setSyncAgentLoading(true);
+    api.getSyncAgentInfo()
+      .then(setSyncAgentInfo)
+      .catch(() => setSyncAgentInfo(null))
+      .finally(() => setSyncAgentLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   useEffect(() => {
     if (profileMsg?.type !== 'success') return;
@@ -388,67 +344,44 @@ export default function Admin() {
     }
   }
 
-  async function handleSaveFolder(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleUploadFolder() {
     setFolderMsg(null);
-    const nextPath = folderPath.trim();
-    if (!nextPath) {
-      setFolderMsg({ type: 'error', text: 'Enter the folder path where job files are dropped.' });
-      return;
-    }
-    if (!isAbsoluteFolderPath(nextPath)) {
-      setFolderMsg({ type: 'error', text: FOLDER_PATH_HINT });
-      return;
-    }
-    setSavingFolder(true);
     try {
-      const status = await api.updateFolderSyncSettings({
-        folderPath: nextPath,
-        intervalMinutes,
+      const { folderName, files } = await pickFolderFromDisk();
+      if (!files || files.length === 0) {
+        setFolderMsg({ type: 'error', text: 'The selected folder is empty.' });
+        return;
+      }
+
+      setUploading(true);
+      setFolderJobsOpen(true);
+
+      const result = await processAndUploadFolder(folderName, files, (progress) => {
+        setUploadProgress(progress);
+        setFolderPairs([...progress.pairs]);
       });
-      setFolderStatus(status);
-      setFolderPath(status.folderPath);
-      setIntervalMinutes(status.intervalMinutes);
+
+      setUploadSummary(result);
+      setFolderPairs([...result.pairs]);
+
+      const partsCount = result.pairs.reduce((acc, p) => acc + (p.unitsImported || 0), 0);
       setFolderMsg({
         type: 'success',
-        text: `Folder saved. New jobs will be checked ${intervalLabel(status.intervalMinutes).toLowerCase()}.`,
+        text: `Folder "${result.folderName}" uploaded: ${result.imported} imported (${partsCount} pieces), ${result.skipped} already in database, ${result.failed} failed.`,
       });
-    } catch (err: unknown) {
-      setFolderMsg({ type: 'error', text: err instanceof Error ? err.message : 'Could not save folder path' });
+    } catch (err: any) {
+      if (err?.message !== 'USER_CANCELLED') {
+        setFolderMsg({
+          type: 'error',
+          text: err instanceof Error ? err.message : 'Could not upload folder',
+        });
+      }
     } finally {
-      setSavingFolder(false);
+      setUploading(false);
+      setUploadProgress(null);
     }
   }
 
-  async function handleSyncNow() {
-    setFolderMsg(null);
-    setSyncing(true);
-    try {
-      await api.runFolderSync();
-      const status = await api.getFolderSyncStatus();
-      setFolderStatus(status);
-      setFolderMsg({ type: 'success', text: 'Sync finished. Job list is up to date.' });
-    } catch (err: unknown) {
-      setFolderMsg({ type: 'error', text: err instanceof Error ? err.message : 'Folder sync failed' });
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  function intervalLabel(mins: number): string {
-    return INTERVAL_OPTIONS.find((o) => o.value === mins)?.label || `Every ${mins} minutes`;
-  }
-
-  const lastRun = folderStatus?.lastRun;
-  const pairs = [...(folderStatus?.pairs ?? [])].sort((a, b) => {
-    const aTime = a.lastSyncedAt ? Date.parse(a.lastSyncedAt) : 0;
-    const bTime = b.lastSyncedAt ? Date.parse(b.lastSyncedAt) : 0;
-    if (bTime !== aTime) return bTime - aTime;
-    const aName = (a.jobName || a.pairKey || '').toLowerCase();
-    const bName = (b.jobName || b.pairKey || '').toLowerCase();
-    return aName.localeCompare(bName);
-  });
-  const syncOn = folderStatus?.enabled !== false;
   const initials = (fullName || currentUser.avatar || 'A').slice(0, 2).toUpperCase();
   const activeOperators = operators.filter((o) => o.isActive === 1).length;
   const operatorFormOpen = creatingOperator || editingOperatorId != null;
@@ -458,7 +391,7 @@ export default function Admin() {
       <div className="page-header admin-hero">
         <div>
           <h2>Admin</h2>
-          <p>Manage your account, mobile operators, and automatic job imports.</p>
+          <p>Manage your account, mobile operators, and job import folder.</p>
         </div>
         <div className="admin-hero-meta">
           <div className="admin-meta-chip">
@@ -468,9 +401,9 @@ export default function Admin() {
               {' '}active operator{activeOperators === 1 ? '' : 's'}
             </span>
           </div>
-          <div className={`admin-meta-chip ${syncOn ? 'is-ok' : 'is-warn'}`}>
-            <FolderSync size={14} />
-            <span>{syncOn ? 'Auto-sync on' : 'Auto-sync off'}</span>
+          <div className={`admin-meta-chip ${uploadSummary ? 'is-ok' : ''}`}>
+            <FolderOpen size={14} />
+            <span>{uploadSummary ? `${uploadSummary.folderName} (${uploadSummary.imported} imported)` : 'Folder upload'}</span>
           </div>
           <div className="admin-meta-chip">
             <Archive size={14} />
@@ -708,192 +641,272 @@ export default function Admin() {
         </div>
       </div>
 
+
       <div className="admin-section-label">Imports</div>
+
+      {/* ── Download Sync Agent card ── */}
+      <div className="card admin-panel admin-download-card">
+        <div className="card-header">
+          <div className="admin-panel-heading">
+            <div className="admin-icon-badge is-indigo">
+              <Monitor size={16} />
+            </div>
+            <div>
+              <div className="card-title">Desktop Sync Agent</div>
+              <div className="card-subtitle">
+                Windows desktop app that watches your ImportData folder and uploads jobs automatically.
+              </div>
+            </div>
+          </div>
+          {syncAgentLoading ? (
+            <RefreshCw size={16} className="animate-spin" style={{ color: 'var(--muted)' }} />
+          ) : syncAgentInfo?.available ? (
+            <a
+              href={`${(import.meta.env.VITE_API_URL || 'http://localhost:3000/api').replace(/\/api$/, '')}/api/downloads/sync-agent/file`}
+              download
+              className="btn btn-primary btn-sm"
+              style={{ textDecoration: 'none' }}
+            >
+              <Download size={14} />
+              Download
+            </a>
+          ) : (
+            <span className="badge badge-pending" style={{ fontSize: '0.72rem' }}>Not uploaded yet</span>
+          )}
+        </div>
+
+        <div className="card-body admin-stack">
+          {/* File info row */}
+          {syncAgentInfo?.available && (
+            <div className="admin-sync-stats">
+              <div className="admin-sync-stat">
+                <span>File</span>
+                <strong style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{syncAgentInfo.filename}</strong>
+              </div>
+              {syncAgentInfo.sizeBytes != null && (
+                <div className="admin-sync-stat">
+                  <span>Size</span>
+                  <strong>{(syncAgentInfo.sizeBytes / 1_048_576).toFixed(1)} MB</strong>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Setup instructions */}
+          <div className="admin-download-instructions">
+            <div className="admin-field-label" style={{ marginBottom: 8 }}>Setup instructions</div>
+            <ol className="admin-download-steps">
+              {(syncAgentInfo?.instructions ?? [
+                'Download and run the installer on the Windows PC that holds the ImportData folder.',
+                'Open the Sync Agent, enter the portal URL and your admin credentials.',
+                'Pick the ImportData folder — the agent will automatically upload new jobs every few minutes.',
+              ]).map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+            </ol>
+          </div>
+
+          {!syncAgentInfo?.available && !syncAgentLoading && (
+            <div className="admin-msg is-error" style={{ marginTop: 4 }}>
+              <AlertCircle size={15} />
+              The installer file (<code>AME-Tracker-Sync-Agent-Setup.exe</code>) has not been placed in the server&apos;s
+              {' '}<code>downloads/</code> folder yet. Build the sync agent with{' '}
+              <code>npm run dist</code> in <code>ame-tracker-sync-agent/</code> and copy the{' '}
+              <code>.exe</code> from its <code>dist/</code> folder to the backend&apos;s <code>downloads/</code> directory.
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="card admin-panel admin-sync-panel">
         <div className="card-header">
           <div className="admin-panel-heading">
             <div className="admin-icon-badge">
-              <FolderSync size={16} />
+              <Upload size={16} />
             </div>
             <div>
-              <div className="card-title">Server job folder sync</div>
+              <div className="card-title">Manual Folder Upload</div>
               <div className="card-subtitle">
-                Watches a folder on the <strong>server</strong> for matching <code>.t4vjob</code> + <code>.xlsx</code> pairs.
-                For files on your PC, use the Sync Agent desktop app.
+                Select a folder containing <code>.t4vjob</code> + <code>.xlsx</code> pairs to check and upload directly.
               </div>
             </div>
           </div>
           <div className="admin-sync-actions">
-            <span className={`badge ${syncOn ? 'badge-success' : 'badge-failed'}`}>
-              {syncOn ? 'Auto-sync on' : 'Auto-sync off'}
-            </span>
             <button
               className="btn btn-primary btn-sm"
-              onClick={() => void handleSyncNow()}
-              disabled={syncing || savingFolder || !syncOn}
+              onClick={() => void handleUploadFolder()}
+              disabled={uploading}
             >
-              {syncing ? <RefreshCw size={14} className="animate-spin" /> : <FolderSync size={14} />}
-              {syncing ? 'Syncing…' : 'Sync now'}
+              {uploading ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
+              {uploading ? 'Uploading…' : 'Upload Folder'}
             </button>
           </div>
         </div>
 
-        <form className="card-body admin-stack" onSubmit={handleSaveFolder}>
-          <div className="admin-sync-stats">
-            <div className="admin-sync-stat">
-              <span>Last check</span>
-              <strong>{syncing || folderStatus?.running ? 'Running…' : formatRelative(lastRun?.finishedAt)}</strong>
-            </div>
-            <div className="admin-sync-stat">
-              <span>Imported</span>
-              <strong>{lastRun?.imported ?? 0}</strong>
-            </div>
-            <div className="admin-sync-stat">
-              <span>Already there</span>
-              <strong>{lastRun?.skipped ?? 0}</strong>
-            </div>
-            <div className="admin-sync-stat is-warn">
-              <span>Waiting for files</span>
-              <strong>{lastRun?.incomplete ?? 0}</strong>
-            </div>
-            <div className="admin-sync-stat is-error">
-              <span>Failed</span>
-              <strong>{lastRun?.failed ?? 0}</strong>
-            </div>
-          </div>
-
-          <div className="admin-form-grid admin-sync-form-grid">
-            <div className="form-group admin-form-grid-span">
-              <label className="form-label">Watch folder</label>
-              <div className="admin-path-input">
-                <FolderOpen size={16} />
-                <input
-                  className="form-input"
-                  value={folderPath}
-                  onChange={(e) => setFolderPath(e.target.value)}
-                  placeholder={FOLDER_PATH_PLACEHOLDER}
-                  disabled={savingFolder}
-                  autoComplete="off"
-                />
+        <div className="card-body admin-stack">
+          {!uploading && !uploadSummary && folderPairs.length === 0 ? (
+            <div
+              className="admin-folder-dropzone"
+              onClick={() => void handleUploadFolder()}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') void handleUploadFolder(); }}
+            >
+              <div className="admin-folder-dropzone-icon">
+                <Upload size={24} />
               </div>
-              <div className="form-hint">
-                Full path on the <strong>application server</strong> (or a share mounted there), not a folder on your laptop.
-                If job files live on your PC, use the <strong>AME Tracker Sync Agent</strong> desktop app instead — do not paste a local path here.
+              <div className="admin-folder-dropzone-text">
+                <strong>Click to select a folder from your computer</strong>
+                <span>Choose any folder with matching <code>.t4vjob</code> and <code>.xlsx</code> files. Existing jobs in the server are checked automatically before uploading.</span>
               </div>
+              <button type="button" className="btn btn-secondary btn-sm" style={{ pointerEvents: 'none' }}>
+                <FolderOpen size={14} />
+                Browse Folder
+              </button>
             </div>
-            <div className="form-group">
-              <label className="form-label">How often to check</label>
-              <select
-                className="form-select"
-                value={intervalMinutes}
-                onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 5))}
-                disabled={savingFolder}
-              >
-                {!INTERVAL_OPTIONS.some((o) => o.value === intervalMinutes) && (
-                  <option value={intervalMinutes}>{intervalLabel(intervalMinutes)}</option>
-                )}
-                {INTERVAL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="admin-folder-active-bar">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <FolderOpen size={18} color="#047857" />
+                  <div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#047857' }}>
+                      {uploadProgress?.folderName || uploadSummary?.folderName || 'Selected Folder'}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#4B5563', marginTop: 2 }}>
+                      {uploading
+                        ? 'Checking files and uploading new jobs to server…'
+                        : `Upload complete — ${folderPairs.length} job pair${folderPairs.length === 1 ? '' : 's'} processed`}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => void handleUploadFolder()}
+                  disabled={uploading}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  <Upload size={14} />
+                  Upload Another Folder
+                </button>
+              </div>
 
-          {folderStatus?.error && <Message type="error" text={folderStatus.error} />}
+              {uploading && uploadProgress && (
+                <div className="admin-upload-progress-box">
+                  <div className="admin-upload-progress-header">
+                    <span>{uploadProgress.message || 'Processing…'}</span>
+                    <span>{uploadProgress.percent}% ({uploadProgress.currentIndex}/{uploadProgress.total})</span>
+                  </div>
+                  <div className="admin-upload-progress-bar">
+                    <div
+                      className="admin-upload-progress-fill"
+                      style={{ width: `${Math.max(4, uploadProgress.percent)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="admin-sync-stats">
+                <div className="admin-sync-stat">
+                  <span>Total Pairs</span>
+                  <strong>{uploadProgress ? uploadProgress.total : (uploadSummary?.totalPairs ?? folderPairs.length)}</strong>
+                </div>
+                <div className="admin-sync-stat" style={{ borderColor: '#A7F3D0' }}>
+                  <span style={{ color: '#047857' }}>Imported</span>
+                  <strong style={{ color: '#047857' }}>
+                    {uploadProgress ? uploadProgress.imported : (uploadSummary?.imported ?? folderPairs.filter((p) => p.status === 'SYNCED').length)}
+                  </strong>
+                </div>
+                <div className="admin-sync-stat">
+                  <span>Already in DB</span>
+                  <strong>
+                    {uploadProgress ? uploadProgress.skipped : (uploadSummary?.skipped ?? folderPairs.filter((p) => p.status === 'SKIPPED').length)}
+                  </strong>
+                </div>
+                <div className="admin-sync-stat is-warn">
+                  <span>Waiting for files</span>
+                  <strong>
+                    {uploadProgress ? uploadProgress.incomplete : (uploadSummary?.incomplete ?? folderPairs.filter((p) => p.status === 'INCOMPLETE').length)}
+                  </strong>
+                </div>
+                <div className="admin-sync-stat is-error">
+                  <span>Failed</span>
+                  <strong>
+                    {uploadProgress ? uploadProgress.failed : (uploadSummary?.failed ?? folderPairs.filter((p) => p.status === 'FAILED').length)}
+                  </strong>
+                </div>
+              </div>
+            </>
+          )}
+
           {folderMsg && <Message type={folderMsg.type} text={folderMsg.text} />}
+        </div>
 
-          <div className="admin-form-actions">
-            <button className="btn btn-primary" type="submit" disabled={savingFolder || syncing}>
-              {savingFolder ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-              {savingFolder ? 'Saving…' : 'Save folder settings'}
+        {folderPairs.length > 0 && (
+          <>
+            <button
+              type="button"
+              className={`admin-jobs-head admin-collapse-toggle ${folderJobsOpen ? 'is-open' : ''}`}
+              onClick={() => setFolderJobsOpen((open) => !open)}
+              aria-expanded={folderJobsOpen}
+            >
+              <div>
+                <div className="card-title">Jobs in this folder</div>
+                <div className="card-subtitle">
+                  {folderPairs.length === 1
+                    ? '1 job file pair processed'
+                    : `${folderPairs.length} job file pairs processed`}
+                </div>
+              </div>
+              <ChevronDown size={18} className="admin-collapse-chevron" />
             </button>
-          </div>
-        </form>
 
-        <button
-          type="button"
-          className={`admin-jobs-head admin-collapse-toggle ${folderJobsOpen ? 'is-open' : ''}`}
-          onClick={() => setFolderJobsOpen((open) => !open)}
-          aria-expanded={folderJobsOpen}
-        >
-          <div>
-            <div className="card-title">Jobs in this folder</div>
-            <div className="card-subtitle">
-              {loading && !folderStatus
-                ? 'Checking folder…'
-                : pairs.length === 1
-                  ? '1 job file pair found'
-                  : `${pairs.length} job file pairs found`}
-            </div>
-          </div>
-          <ChevronDown size={18} className="admin-collapse-chevron" />
-        </button>
-
-        {folderJobsOpen && (
-          <div className="table-wrapper import-history-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Job</th>
-                  <th>Files</th>
-                  <th>Imported</th>
-                  <th>Status</th>
-                  <th>Last checked</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && !folderStatus ? (
-                  <tr>
-                    <td colSpan={5} className="admin-empty">
-                      <RefreshCw size={18} className="animate-spin" />
-                      Checking the watch folder…
-                    </td>
-                  </tr>
-                ) : pairs.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="admin-empty">
-                      <FolderOpen size={22} />
-                      <div>
-                        <strong>No job files yet</strong>
-                        <div>Drop a matching .t4vjob and .xlsx into the folder, then tap Sync now.</div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  pairs.map((pair) => (
-                    <tr key={pair.pairKey}>
-                      <td>
-                        <div className="admin-job-name">{pair.jobName || pair.pairKey}</div>
-                        <div className="admin-job-id">{pair.sourceJobId || pair.pairKey}</div>
-                      </td>
-                      <td>
-                        <div className="admin-file-row">
-                          <FileChip present={Boolean(pair.t4vjobFile)} label={pair.t4vjobFile ? 'Job file' : 'No job file'} />
-                          <FileChip present={Boolean(pair.xlsxFile)} label={pair.xlsxFile ? 'Excel file' : 'No Excel file'} />
-                        </div>
-                      </td>
-                      <td>
-                        {pair.itemsImported || pair.unitsImported
-                          ? `${pair.itemsImported} items · ${pair.unitsImported} pieces`
-                          : '—'}
-                      </td>
-                      <td>
-                        <span className={`badge ${folderBadgeClass(pair.status)}`}>
-                          {folderStatusLabel(pair.status)}
-                        </span>
-                      </td>
-                      <td className="admin-muted-cell">
-                        {formatRelative(pair.lastSyncedAt)}
-                        {pair.message ? (
-                          <div className="admin-job-msg">{pair.message}</div>
-                        ) : null}
-                      </td>
+            {folderJobsOpen && (
+              <div className="table-wrapper import-history-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Job</th>
+                      <th>Files</th>
+                      <th>Imported</th>
+                      <th>Status</th>
+                      <th>Details</th>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {folderPairs.map((pair) => (
+                      <tr key={pair.pairKey}>
+                        <td>
+                          <div className="admin-job-name">{pair.jobName || pair.pairKey}</div>
+                          <div className="admin-job-id">{pair.sourceJobId || pair.pairKey}</div>
+                        </td>
+                        <td>
+                          <div className="admin-file-row">
+                            <FileChip present={Boolean(pair.t4vjobFile)} label={pair.t4vjobFile ? 'Job file' : 'No job file'} />
+                            <FileChip present={Boolean(pair.xlsxFile)} label={pair.xlsxFile ? 'Excel file' : 'No Excel file'} />
+                          </div>
+                        </td>
+                        <td>
+                          {pair.itemsImported || pair.unitsImported
+                            ? `${pair.itemsImported} items · ${pair.unitsImported} pieces`
+                            : '—'}
+                        </td>
+                        <td>
+                          <span className={`badge ${folderBadgeClass(pair.status)}`}>
+                            {folderStatusLabel(pair.status)}
+                          </span>
+                        </td>
+                        <td className="admin-muted-cell">
+                          {pair.message || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </div>
 

@@ -2,13 +2,17 @@
   "name": "ame-tracker-sync-agent",
   "version": "1.0.0",
   "private": true,
+  "author": "AME Tracker",
   "description": "Desktop sync agent — watches a local folder and uploads .t4vjob + .xlsx pairs to AME Tracker",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable",
+    "dist:dir": "electron-builder --dir"
   },
+
   "build": {
     "appId": "com.ame.tracker.syncagent",
     "productName": "AME Tracker Sync Agent",
@@ -20,7 +24,8 @@
       "package.json"
     ],
     "win": {
-      "target": ["nsis"]
+      "target": ["nsis"],
+      "icon": "src/icon.ico"
     },
     "nsis": {
       "oneClick": false,

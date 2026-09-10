@@ -3,6 +3,8 @@ const https = require('https')
 const { URL } = require('url')
 const FormData = require('form-data')
 
+const REQUEST_TIMEOUT_MS = 30_000 // 30 s — prevents hung sockets freezing the engine
+
 class ApiClient {
   constructor(opts) {
     this.getApiUrl = opts.getApiUrl
@@ -17,6 +19,8 @@ class ApiClient {
       body: { email, password },
       auth: false,
     })
+    // Backend wraps response as { success, data: { accessToken, ... } }
+    // unwrap() already peels off the outer envelope, so data here IS the inner object.
     if (!data?.accessToken) {
       throw new Error('Login response missing access token')
     }
@@ -139,7 +143,7 @@ class ApiClient {
       try {
         base = new URL(this.getApiUrl())
       } catch {
-        reject(new Error('Invalid API URL'))
+        reject(new Error('Invalid API URL — check Server Endpoint Settings'))
         return
       }
 
@@ -153,6 +157,7 @@ class ApiClient {
           path: url.pathname + url.search,
           method,
           headers,
+          timeout: REQUEST_TIMEOUT_MS,
         },
         (res) => {
           const chunks = []
@@ -181,10 +186,16 @@ class ApiClient {
           })
         },
       )
+
+      // Bug fix #2: socket timeout — destroys the request if server hangs
+      req.on('timeout', () => {
+        req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`))
+      })
       req.on('error', reject)
 
       if (body && typeof body.pipe === 'function') {
-        body.pipe(req)
+        // Bug fix #3: explicitly end the request after the stream finishes
+        body.pipe(req, { end: true })
       } else if (body != null) {
         req.write(body)
         req.end()

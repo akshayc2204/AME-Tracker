@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('ameAgent', {
   login: (email, password) => ipcRenderer.invoke('auth:login', { email, password }),
   logout: () => ipcRenderer.invoke('auth:logout'),
   pickFolder: () => ipcRenderer.invoke('folder:pick'),
+  openFolder: (folderPath) => ipcRenderer.invoke('folder:open', folderPath),
+  openWebPortal: (url) => ipcRenderer.invoke('portal:open', url),
   runSync: () => ipcRenderer.invoke('sync:run'),
   startWatching: () => ipcRenderer.invoke('sync:start'),
   onSyncStatus: (callback) => {

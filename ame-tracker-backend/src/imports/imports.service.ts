@@ -139,14 +139,21 @@ export class ImportsService {
       : false
 
     if (prior?.status === 'SYNCED' && !needsTrackingExport) {
-      return {
-        status: 'SKIPPED',
-        pairKey,
-        sourceJobId: prior.sourceJobId ?? sourceJobId,
-        jobName,
-        itemsImported: prior.itemsImported,
-        unitsImported: prior.unitsImported,
-        message: prior.message || 'Already synced — data already present',
+      const jobStillExists =
+        alreadyInDb ||
+        (prior.jobId
+          ? !!(await this.prisma.job.findUnique({ where: { id: prior.jobId } }))
+          : false)
+      if (jobStillExists) {
+        return {
+          status: 'SKIPPED',
+          pairKey,
+          sourceJobId: prior.sourceJobId ?? sourceJobId,
+          jobName,
+          itemsImported: prior.itemsImported,
+          unitsImported: prior.unitsImported,
+          message: prior.message || 'Already synced — data already present',
+        }
       }
     }
 
@@ -353,6 +360,33 @@ export class ImportsService {
       : false
 
     if (prior?.status === 'SYNCED' && !needsTrackingExport) {
+      // Verify the job still exists — user may have deleted it from the portal.
+      // If the job is gone, clear the FileSync record and force a re-import.
+      const jobStillExists = prior.sourceJobId
+        ? await this.jobAlreadyImported(prior.sourceJobId)
+        : (prior.jobId ? !!(await this.prisma.job.findUnique({ where: { id: prior.jobId } })) : true)
+
+      if (!jobStillExists) {
+        // Delete the stale FileSync record so the next upload goes through cleanly
+        await this.prisma.fileSync.delete({
+          where: {
+            pairKey_t4vjobHash_xlsxHash: {
+              pairKey,
+              t4vjobHash: input.t4vjobHash,
+              xlsxHash: input.xlsxHash,
+            },
+          },
+        }).catch(() => {})
+        return {
+          shouldSkip: false,
+          reason: 'NEEDS_IMPORT',
+          sourceJobId: prior.sourceJobId ?? sourceJobId,
+          message: 'Job was deleted — re-importing',
+          itemsImported: 0,
+          unitsImported: 0,
+        }
+      }
+
       return {
         shouldSkip: true,
         reason: 'HASH_SYNCED',
@@ -362,6 +396,7 @@ export class ImportsService {
         unitsImported: prior.unitsImported,
       }
     }
+
 
     if (sourceJobId) {
       const alreadyInDb = await this.jobAlreadyImported(sourceJobId)
@@ -412,14 +447,30 @@ export class ImportsService {
     }
 
     if (prior?.status === 'SKIPPED' && !needsTrackingExport) {
-      return {
-        shouldSkip: true,
-        reason: 'JOB_IN_DB',
-        sourceJobId: prior.sourceJobId ?? sourceJobId,
-        message: prior.message || 'Previously skipped — job already in database',
-        itemsImported: prior.itemsImported,
-        unitsImported: prior.unitsImported,
+      const jobStillExists = prior.sourceJobId
+        ? await this.jobAlreadyImported(prior.sourceJobId)
+        : (prior.jobId ? !!(await this.prisma.job.findUnique({ where: { id: prior.jobId } })) : false)
+
+      if (jobStillExists) {
+        return {
+          shouldSkip: true,
+          reason: 'JOB_IN_DB',
+          sourceJobId: prior.sourceJobId ?? sourceJobId,
+          message: prior.message || 'Previously skipped — job already in database',
+          itemsImported: prior.itemsImported,
+          unitsImported: prior.unitsImported,
+        }
       }
+
+      await this.prisma.fileSync.delete({
+        where: {
+          pairKey_t4vjobHash_xlsxHash: {
+            pairKey,
+            t4vjobHash: input.t4vjobHash,
+            xlsxHash: input.xlsxHash,
+          },
+        },
+      }).catch(() => {})
     }
 
     return {

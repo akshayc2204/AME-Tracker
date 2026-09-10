@@ -1,8 +1,26 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeImage } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeImage, shell } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const Store = require('electron-store')
 const { SyncEngine } = require('./sync-engine')
 const { ApiClient } = require('./api-client')
+
+const APP_ID = 'com.ame.tracker.syncagent'
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID)
+}
+
+function getAppIcon() {
+  const pngPath = path.join(__dirname, 'icon.png')
+  const icoPath = path.join(__dirname, 'icon.ico')
+  if (fs.existsSync(pngPath)) {
+    return pngPath
+  }
+  if (fs.existsSync(icoPath)) {
+    return icoPath
+  }
+  return pngPath
+}
 
 const store = new Store({
   name: 'ame-sync-agent',
@@ -14,6 +32,8 @@ const store = new Store({
     refreshToken: '',
     userEmail: '',
     syncedHashes: {},
+    lastCheckedAt: '',
+    lastCheckSummary: '',
   },
 })
 
@@ -23,12 +43,16 @@ let syncEngine = null
 let apiClient = null
 
 function createWindow() {
+  const iconPath = getAppIcon()
   mainWindow = new BrowserWindow({
-    width: 520,
-    height: 680,
-    minWidth: 420,
-    minHeight: 560,
+    width: 580,
+    height: 750,
+    minWidth: 500,
+    minHeight: 650,
     show: false,
+    title: 'AME Tracker Sync Agent',
+    icon: iconPath,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -36,6 +60,16 @@ function createWindow() {
     },
   })
 
+  if (iconPath) {
+    try {
+      const nativeImg = nativeImage.createFromPath(iconPath)
+      if (!nativeImg.isEmpty()) {
+        mainWindow.setIcon(nativeImg)
+      }
+    } catch {}
+  }
+
+  mainWindow.setMenuBarVisibility(false)
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
 
   mainWindow.once('ready-to-show', () => {
@@ -51,9 +85,15 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, 'icon.png')
-  let icon = nativeImage.createFromPath(iconPath)
+  const pngPath = path.join(__dirname, 'icon.png')
+  let icon = nativeImage.createFromPath(pngPath)
   if (icon.isEmpty()) {
+    icon = nativeImage.createFromPath(path.join(__dirname, 'icon.ico'))
+  }
+  if (!icon.isEmpty()) {
+    // 16x16 crisp tray scaling with full 32-bit color
+    icon = icon.resize({ width: 16, height: 16 })
+  } else {
     icon = nativeImage.createFromDataURL(
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALElEQVRoge3OMQEAAAjDMMC/5+EIX0hggQAAAAAAAAAAAAAAwN0G/gAB9fQAcgAAAABJRU5ErkJggg==',
     )
@@ -115,6 +155,29 @@ function getSettings() {
     intervalMinutes: store.get('intervalMinutes'),
     userEmail: store.get('userEmail'),
     loggedIn: Boolean(store.get('accessToken')),
+    lastCheckedAt: store.get('lastCheckedAt') || '',
+    lastCheckSummary: store.get('lastCheckSummary') || '',
+  }
+}
+
+/**
+ * Prune syncedHashes entries older than 30 days to prevent unbounded store growth.
+ */
+function pruneOldHashes() {
+  const map = store.get('syncedHashes') || {}
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+  let pruned = 0
+  const pruned_map = Object.fromEntries(
+    Object.entries(map).filter(([, v]) => {
+      if (!v || !v.at) return true // keep entries with no timestamp
+      return new Date(v.at).getTime() > cutoff
+    })
+  )
+  pruned = Object.keys(map).length - Object.keys(pruned_map).length
+  if (pruned > 0) {
+    store.set('syncedHashes', pruned_map)
+    // eslint-disable-next-line no-console
+    console.log(`[pruneOldHashes] Removed ${pruned} stale hash entries`)
   }
 }
 
@@ -131,6 +194,13 @@ function ensureClients() {
       store.set('accessToken', '')
       store.set('refreshToken', '')
       store.set('userEmail', '')
+      // Bug fix #6: notify the renderer that the session expired so it can re-show the login screen
+      sendToRenderer('sync:status', {
+        phase: 'auth_error',
+        label: 'Session expired',
+        message: 'Your session has expired. Please sign in again.',
+        pairs: [],
+      })
     },
   })
 
@@ -173,6 +243,14 @@ async function runSync(reason) {
   updateTrayMenu('Syncing…')
   try {
     const result = await syncEngine.run(reason)
+    if (result) {
+      const at = result.finishedAt || new Date().toISOString()
+      const summary = result.scannedPairs === 0
+        ? 'No pairs found in folder'
+        : `${result.scannedPairs} pairs scanned (${result.imported} in, ${result.skipped} skip${result.failed ? `, ${result.failed} fail` : ''})`
+      store.set('lastCheckedAt', at)
+      store.set('lastCheckSummary', summary)
+    }
     updateTrayMenu(
       result
         ? `Last: ${result.imported} in / ${result.skipped} skip / ${result.failed} fail`
@@ -276,11 +354,28 @@ function registerIpc() {
     syncEngine.startTimer()
     return { ok: true }
   })
+
+  ipcMain.handle('folder:open', async (_event, folderPath) => {
+    const target = folderPath || store.get('folderPath')
+    if (target) {
+      await shell.openPath(target)
+      return { ok: true }
+    }
+    return { ok: false, error: 'No folder path provided' }
+  })
+
+  ipcMain.handle('portal:open', async (_event, url) => {
+    const target = url || store.get('apiUrl') || 'http://localhost:3000'
+    await shell.openExternal(target)
+    return { ok: true }
+  })
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null)
   registerIpc()
   ensureClients()
+  pruneOldHashes()
   createWindow()
   createTray()
 

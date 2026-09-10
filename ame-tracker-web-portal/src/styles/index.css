@@ -1254,6 +1254,37 @@ tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
   color: var(--slate-600);
   border-color: var(--slate-200);
 }
+.admin-icon-badge.is-indigo {
+  background: #eef2ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+
+/* ── Download Sync Agent card ── */
+.admin-download-card .card-header {
+  align-items: flex-start;
+}
+.admin-download-instructions {
+  background: var(--slate-50, #f8fafc);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.admin-download-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.admin-download-steps li::marker {
+  color: #4f46e5;
+  font-weight: 700;
+}
+
 
 .admin-stack {
   display: flex;
@@ -1472,6 +1503,89 @@ tbody td { padding: 13px 16px; font-size: 13.5px; color: var(--text-primary); }
 }
 .admin-sync-stat.is-warn strong { color: var(--amber-600); }
 .admin-sync-stat.is-error strong { color: var(--red-600); }
+
+/* ── Folder Upload Styles ── */
+.admin-folder-dropzone {
+  border: 2px dashed #CBD5E1;
+  border-radius: 12px;
+  padding: 32px 24px;
+  background: #F8FAFC;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.admin-folder-dropzone:hover {
+  border-color: var(--primary);
+  background: #F0FDF4;
+}
+.admin-folder-dropzone-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #D1FAE5;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.admin-folder-dropzone-text strong {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.admin-folder-dropzone-text span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.admin-upload-progress-box {
+  background: #F8FAFC;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.admin-upload-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.admin-upload-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #E2E8F0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.admin-upload-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary) 0%, #059669 100%);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+.admin-folder-active-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: #F0FDF4;
+  border: 1px solid #A7F3D0;
+  flex-wrap: wrap;
+}
 
 .admin-path-input {
   position: relative;

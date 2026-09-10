@@ -1716,7 +1716,7 @@ export default function Reports() {
                               </tr>
                             </thead>
                             <tbody>
-                              {gaugePreview.projectSummary.map((p, idx) => (
+                              {gaugePreview.projectSummary.map((p) => (
                                 <tr
                                   key={p.projectName}
                                   style={{

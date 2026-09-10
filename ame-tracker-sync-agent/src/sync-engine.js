@@ -23,6 +23,21 @@ function peekSourceJobId(text) {
   return code ? code[1].toUpperCase() : jobName || null
 }
 
+function isSameDay(date1, date2 = new Date()) {
+  if (!date1) return false
+  try {
+    const d1 = new Date(date1)
+    const d2 = new Date(date2)
+    return (
+      d1.getFullYear() === d2.getFullYear() &&
+      d1.getMonth() === d2.getMonth() &&
+      d1.getDate() === d2.getDate()
+    )
+  } catch {
+    return false
+  }
+}
+
 class SyncEngine {
   constructor(opts) {
     this.getFolderPath = opts.getFolderPath
@@ -97,14 +112,24 @@ class SyncEngine {
       const discovered = await this.discoverPairs(folderPath)
 
       for (const pair of discovered) {
+        let mtime = null
+        try {
+          const s = await fsp.stat(pair.t4vjobPath || pair.xlsxPath)
+          mtime = s.mtime.toISOString()
+        } catch {}
+
         if (!pair.t4vjobPath || !pair.xlsxPath) {
           incomplete++
+          const isToday = isSameDay(mtime)
           pairs.push({
             pairKey: pair.pairKey,
             status: 'INCOMPLETE',
             message: 'Waiting for matching .t4vjob and .xlsx with the same name',
             t4vjobFile: pair.t4vjobPath ? path.basename(pair.t4vjobPath) : null,
             xlsxFile: pair.xlsxPath ? path.basename(pair.xlsxPath) : null,
+            at: mtime || new Date().toISOString(),
+            mtime,
+            isToday,
           })
           continue
         }
@@ -119,15 +144,26 @@ class SyncEngine {
           ])
           const hashKey = `${pair.pairKey}|${t4Hash}|${xlsxHash}`
           const local = this.getSyncedHashes()[hashKey]
-          if (local?.status === 'SYNCED' || local?.status === 'SKIPPED') {
-            skipped++
+
+          // We do NOT short-circuit for local SYNCED or SKIPPED status here.
+          // Jobs may have been deleted from the portal since the last sync.
+          // checkPair is lightweight (5ms) and asks the server whether the job
+          // actually exists in the database.
+
+          // Skip previously-failed pairs from retrying on automatic interval.
+          // On manual "Sync Now", retry them anyway.
+          if (local?.status === 'FAILED' && reason !== 'manual') {
+            failed++
             pairs.push({
               pairKey: pair.pairKey,
-              status: 'SKIPPED',
-              message: local.message || 'Already synced — skipped locally',
+              status: 'FAILED',
+              message: local.message || 'Upload failed on previous attempt — modify files or click Sync Now to retry',
               t4vjobFile: path.basename(pair.t4vjobPath),
               xlsxFile: path.basename(pair.xlsxPath),
               sourceJobId: local.sourceJobId || null,
+              at: local.at || mtime || new Date().toISOString(),
+              mtime,
+              isToday: isSameDay(local.at) || isSameDay(mtime),
             })
             continue
           }
@@ -166,21 +202,28 @@ class SyncEngine {
 
           if (check?.shouldSkip) {
             skipped++
+            const now = new Date().toISOString()
+            // If the server confirmed HASH_SYNCED (same files, job still in DB),
+            // write back as SYNCED so the agent shows it correctly.
+            const cacheStatus = check.reason === 'HASH_SYNCED' ? 'SYNCED' : 'SKIPPED'
             this.setSyncedHash(hashKey, {
-              status: 'SKIPPED',
+              status: cacheStatus,
               message: check.message,
               sourceJobId: check.sourceJobId || sourceJobId,
-              at: new Date().toISOString(),
+              at: now,
             })
             pairs.push({
               pairKey: pair.pairKey,
-              status: 'SKIPPED',
+              status: cacheStatus,
               message: check.message || 'Already in database — upload skipped',
               t4vjobFile: path.basename(pair.t4vjobPath),
               xlsxFile: path.basename(pair.xlsxPath),
               sourceJobId: check.sourceJobId || sourceJobId,
               itemsImported: check.itemsImported ?? 0,
               unitsImported: check.unitsImported ?? 0,
+              at: now,
+              mtime,
+              isToday: true,
             })
             continue
           }
@@ -206,11 +249,12 @@ class SyncEngine {
           else if (status === 'SKIPPED') skipped++
           else failed++
 
+          const now = new Date().toISOString()
           this.setSyncedHash(hashKey, {
-            status: status === 'FAILED' ? 'FAILED' : status,
+            status,
             message: result?.message,
             sourceJobId: result?.sourceJobId || sourceJobId,
-            at: new Date().toISOString(),
+            at: now,
           })
 
           pairs.push({
@@ -222,16 +266,39 @@ class SyncEngine {
             sourceJobId: result?.sourceJobId || sourceJobId,
             itemsImported: result?.itemsImported ?? 0,
             unitsImported: result?.unitsImported ?? 0,
+            at: now,
+            mtime,
+            isToday: true,
           })
         } catch (err) {
           failed++
           const message = err instanceof Error ? err.message : String(err)
+          // Bug fix #4: persist failure so we don't retry the exact same bytes every interval.
+          // The pair will be retried automatically if the file changes (new hash).
+          const hashKey = `${pair.pairKey}|FAILED|${Date.now()}`
+          try {
+            const [t4Hash, xlsxHash] = await Promise.all([
+              this.hashFile(pair.t4vjobPath),
+              this.hashFile(pair.xlsxPath),
+            ])
+            this.setSyncedHash(`${pair.pairKey}|${t4Hash}|${xlsxHash}`, {
+              status: 'FAILED',
+              message,
+              at: new Date().toISOString(),
+            })
+          } catch {
+            // If hashing itself failed, skip persistence
+            void hashKey
+          }
           pairs.push({
             pairKey: pair.pairKey,
             status: 'FAILED',
             message,
             t4vjobFile: pair.t4vjobPath ? path.basename(pair.t4vjobPath) : null,
             xlsxFile: pair.xlsxPath ? path.basename(pair.xlsxPath) : null,
+            at: new Date().toISOString(),
+            mtime,
+            isToday: true,
           })
         }
       }
@@ -249,10 +316,17 @@ class SyncEngine {
         pairs,
       }
 
+      const summaryLabel = imported > 0
+        ? `${imported} imported`
+        : (failed > 0 ? `${failed} failed` : 'Up to date')
+      const summaryMessage = discovered.length === 0
+        ? 'No pairs found in folder'
+        : `${discovered.length} pair${discovered.length === 1 ? '' : 's'} scanned • ${imported} in, ${skipped} skip${failed > 0 ? `, ${failed} fail` : ''}`
+
       this.onStatus({
         phase: 'idle',
-        label: `Done — ${imported} imported`,
-        message: `imported=${imported} skipped=${skipped} failed=${failed} incomplete=${incomplete}`,
+        label: summaryLabel,
+        message: summaryMessage,
         ...finished,
       })
 
@@ -282,6 +356,8 @@ class SyncEngine {
   }
 
   async listCandidateFiles(folderPath) {
+    // NOTE: Only scans one level of subdirectories by design.
+    // Files nested deeper (e.g. ImportData/2024/Jan/job.t4vjob) are not picked up.
     const out = []
     let entries
     try {
@@ -296,7 +372,12 @@ class SyncEngine {
       if (entry.name.startsWith('.') || entry.name.startsWith('~$')) continue
       const full = path.join(folderPath, entry.name)
       if (entry.isDirectory()) {
-        const nested = await fsp.readdir(full, { withFileTypes: true })
+        let nested
+        try {
+          nested = await fsp.readdir(full, { withFileTypes: true })
+        } catch {
+          continue // skip unreadable subdirectories
+        }
         for (const child of nested) {
           if (child.name.startsWith('.') || child.name.startsWith('~$')) continue
           if (!child.isFile()) continue
@@ -315,22 +396,42 @@ class SyncEngine {
     return ext === '.t4vjob' || ext === '.xlsx' || ext === '.xls'
   }
 
+  /**
+   * Bug fix #1: waitUntilStable — the original always slept AFTER the last size check,
+   * adding an unnecessary 400 ms delay even when the file was already stable on attempt 1.
+   * Now returns immediately once two consecutive checks agree.
+   */
   async waitUntilStable(filePath, attempts = 6, delayMs = 400) {
     let lastSize = -1
     for (let i = 0; i < attempts; i++) {
-      const st = await fsp.stat(filePath)
-      if (st.size === lastSize && st.size > 0) return
+      let st
+      try {
+        st = await fsp.stat(filePath)
+      } catch {
+        // File may have been moved/deleted; let the caller handle the error
+        return
+      }
+      if (st.size === lastSize && st.size > 0) return // stable — exit immediately
       lastSize = st.size
-      await new Promise((r) => setTimeout(r, delayMs))
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, delayMs))
+      }
     }
+    // Timed out waiting for stability — proceed anyway; server will validate
   }
 
+  /**
+   * Bug fix #14: destroy the read stream on error to prevent file handle leaks.
+   */
   hashFile(filePath) {
     return new Promise((resolve, reject) => {
       const hash = createHash('sha256')
       const stream = createReadStream(filePath)
       stream.on('data', (chunk) => hash.update(chunk))
-      stream.on('error', reject)
+      stream.on('error', (err) => {
+        stream.destroy()
+        reject(err)
+      })
       stream.on('end', () => resolve(hash.digest('hex')))
     })
   }

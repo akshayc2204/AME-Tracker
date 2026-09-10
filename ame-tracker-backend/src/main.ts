@@ -33,7 +33,22 @@ async function bootstrap() {
   const uploadRoot = config.get<string>('STORAGE_LOCAL_PATH', './uploads')
   app.useStaticAssets(join(process.cwd(), uploadRoot), { prefix: '/uploads/' })
 
-  // Lightweight reachability check for mobile / LAN discovery (no auth).
+  // Serve installer downloads (no auth — intentionally public)
+  const downloadsDir = join(process.cwd(), 'downloads')
+  app.useStaticAssets(downloadsDir, { prefix: '/downloads/' })
+
+
+  // Root endpoint & lightweight reachability check for mobile / LAN discovery (no auth).
+  app.getHttpAdapter().get('/', (_req: unknown, res: { json: (body: unknown) => void }) => {
+    res.json({
+      success: true,
+      message: 'AME Tracker API is running',
+      endpoints: {
+        health: '/api/health',
+      },
+    })
+  })
+
   app.getHttpAdapter().get('/api/health', (_req: unknown, res: { json: (body: unknown) => void }) => {
     res.json({ success: true, data: { ok: true, service: 'ame-tracker-api' } })
   })

@@ -645,7 +645,26 @@ export const api = {
     ).data;
   },
 
+  async getSyncAgentInfo(): Promise<{
+    available: boolean;
+    filename: string;
+    sizeBytes: number | null;
+    downloadUrl: string | null;
+    instructions: string[];
+  }> {
+    return (
+      await request<{
+        available: boolean;
+        filename: string;
+        sizeBytes: number | null;
+        downloadUrl: string | null;
+        instructions: string[];
+      }>('/downloads/sync-agent')
+    ).data;
+  },
+
   async updateFolderSyncSettings(input: { folderPath?: string; intervalMinutes?: number }) {
+
     return (
       await request<{
         enabled: boolean;
@@ -699,6 +718,46 @@ export const api = {
           message: string | null;
         }>;
       }>('/folder-sync/run', { method: 'POST' })
+    ).data;
+  },
+
+  // Direct Browser Import Endpoints
+  async checkImportPair(dto: {
+    pairKey: string;
+    t4vjobHash: string;
+    xlsxHash: string;
+    sourceJobId?: string | null;
+  }) {
+    return (
+      await request<{
+        shouldSkip: boolean;
+        reason?: string;
+        message?: string;
+        sourceJobId?: string | null;
+      }>('/imports/check', {
+        method: 'POST',
+        body: JSON.stringify(dto),
+      })
+    ).data;
+  },
+
+  async uploadImportPair(t4vjob: File, xlsx: File) {
+    const formData = new FormData();
+    formData.append('t4vjob', t4vjob, t4vjob.name);
+    formData.append('xlsx', xlsx, xlsx.name);
+
+    return (
+      await request<{
+        status: string;
+        message?: string;
+        sourceJobId?: string | null;
+        itemsImported: number;
+        unitsImported: number;
+        jobId?: number;
+      }>('/imports/upload', {
+        method: 'POST',
+        body: formData,
+      })
     ).data;
   },
 
