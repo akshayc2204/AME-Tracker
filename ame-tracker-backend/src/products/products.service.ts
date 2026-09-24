@@ -159,12 +159,7 @@ export class ProductsService {
   }
 
   async listTrackingExport(jobCode?: string) {
-    const where: Record<string, unknown> = {
-      OR: [
-        { sourceItemTrackingId: { not: null } },
-        { item: { isManual: 1 } },
-      ],
-    }
+    const where: Record<string, unknown> = {}
     if (jobCode) {
       where.job = {
         OR: [
@@ -194,7 +189,7 @@ export class ProductsService {
           select: { createdAt: true },
         },
       },
-      orderBy: [{ jobId: 'asc' }, { sourceItemTrackingId: 'asc' }],
+      orderBy: [{ jobId: 'asc' }, { itemId: 'asc' }, { unitIndex: 'asc' }],
     })
 
     const items = units.map((unit) => ({
@@ -735,9 +730,8 @@ function latestUnitTimestamp(unit: {
 }): string | null {
   const eventAt = unit.trackingEvents?.[0]?.createdAt
   if (eventAt) return eventAt.toISOString()
-  if (unit.trackingDate) return unit.trackingDate.toISOString()
   if (unit.currentStatus && unit.currentStatus !== 'PENDING') {
-    return unit.updatedAt.toISOString()
+    return (unit.trackingDate ?? unit.updatedAt).toISOString()
   }
   return null
 }

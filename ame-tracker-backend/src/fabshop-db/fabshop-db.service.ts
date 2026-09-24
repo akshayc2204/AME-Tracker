@@ -28,7 +28,7 @@ export interface FabshopSyncJob {
   LabelColor: number | null
 }
 
-/** Minimal Items row for sync — the piece definition, one row per IDItem. */
+/** Items columns the app stores. The query still reads every Trimble column. */
 export interface FabshopSyncItem {
   IDItem: number
   IDJob: number
@@ -44,33 +44,138 @@ export interface FabshopSyncItem {
   Weight: number | null
   MetricArea: number | null
   Area: number | null
+  AlphaNumber: string | null
+  Drawing: string | null
+  Floor: string | null
+  SystemName: string | null
+  Pressure: string | null
 }
 
-/**
- * One ItemTracking row = one physical unit. Trimble writes Quantity rows per
- * IDItem, so these pair 1:1 with QtyItemGuids rows in Id order.
- */
+/** ItemTracking columns the app stores. */
 export interface FabshopSyncItemTracking {
   IDItemTracking: number
   IDJob: number
   IDItem: number
-  IDTrackingStatus: number | null
   TrackingStatusName: string | null
   TrackingStatusSequence: number | null
-  TrackingDate: Date | null
   PieceNumber: string | null
   Storage: string | null
   Location: string | null
   Container: string | null
   InContainer: boolean | null
+  Description: string | null
+  ScanDate: string | null
+  Component: boolean | null
+  BackOrdered: string | null
 }
 
 export interface FabshopSyncQrCode {
   Id: number
   IdJob: number
   IdItem: number
+  /** Set when QtyItemGuids carries the tracking-row id. */
+  IDItemTracking: number | null
   ItemQtyGuid: string
   GuidInUse: boolean
+}
+
+function cell(row: Record<string, unknown>, ...names: string[]): unknown {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(row, name)) return row[name]
+  }
+  const wanted = new Set(names.map((name) => name.toLowerCase()))
+  for (const [key, value] of Object.entries(row)) {
+    if (wanted.has(key.toLowerCase())) return value
+  }
+  return undefined
+}
+
+function asString(value: unknown): string | null {
+  if (value == null) return null
+  const text = String(value).trim()
+  return text === '' ? null : text
+}
+
+function asNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function asBool(value: unknown): boolean | null {
+  if (value == null || value === '') return null
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  const text = String(value).trim().toLowerCase()
+  if (text === 'true' || text === '1' || text === 'yes') return true
+  if (text === 'false' || text === '0' || text === 'no') return false
+  return null
+}
+
+function mapSyncItem(row: Record<string, unknown>): FabshopSyncItem | null {
+  const IDItem = asNumber(cell(row, 'IDItem', 'IdItem'))
+  const IDJob = asNumber(cell(row, 'IDJob', 'IdJob'))
+  if (IDItem == null || IDJob == null) return null
+  return {
+    IDItem,
+    IDJob,
+    PieceNumber: asString(cell(row, 'PieceNumber', 'PieceNbr')),
+    Fitting: asString(cell(row, 'Fitting')),
+    Metal: asString(cell(row, 'Metal')),
+    Liner: asString(cell(row, 'Liner', 'LinerAndInsulation')),
+    Dimensions: asString(cell(row, 'Dimensions', 'Information')),
+    Instructions: asString(cell(row, 'Instructions')),
+    Quantity: asNumber(cell(row, 'Quantity', 'Qty')),
+    IsFitting: asBool(cell(row, 'IsFitting')),
+    MetricWeight: asNumber(cell(row, 'MetricWeight')),
+    Weight: asNumber(cell(row, 'Weight')),
+    MetricArea: asNumber(cell(row, 'MetricArea')),
+    Area: asNumber(cell(row, 'Area')),
+    AlphaNumber: asString(cell(row, 'AlphaNumber', 'Alpha')),
+    Drawing: asString(cell(row, 'Drawing')),
+    Floor: asString(cell(row, 'Floor')),
+    SystemName: asString(cell(row, 'System', 'SystemName')),
+    Pressure: asString(cell(row, 'Pressure')),
+  }
+}
+
+function mapSyncTracking(row: Record<string, unknown>): FabshopSyncItemTracking | null {
+  const IDItemTracking = asNumber(cell(row, 'IDItemTracking', 'IdItemTracking'))
+  const IDJob = asNumber(cell(row, 'IDJob', 'IdJob'))
+  const IDItem = asNumber(cell(row, 'IDItem', 'IdItem'))
+  if (IDItemTracking == null || IDJob == null || IDItem == null) return null
+  return {
+    IDItemTracking,
+    IDJob,
+    IDItem,
+    TrackingStatusName: asString(cell(row, 'strTrackingStatus', 'TrackingStatus', 'Status')),
+    TrackingStatusSequence: asNumber(cell(row, 'TrackingStatusSequence', 'StatusSequence')),
+    PieceNumber: asString(cell(row, 'PieceNumber', 'PieceNbr')),
+    Storage: asString(cell(row, 'Storage')),
+    Location: asString(cell(row, 'Location')),
+    Container: asString(cell(row, 'Container')),
+    InContainer: asBool(cell(row, 'InContainer')),
+    Description: asString(cell(row, 'Description')),
+    ScanDate: asString(cell(row, 'ScanDate', 'SCANDATE')),
+    Component: asBool(cell(row, 'Component')),
+    BackOrdered: asString(cell(row, 'BackOrdered')),
+  }
+}
+
+function mapSyncQr(row: Record<string, unknown>): FabshopSyncQrCode | null {
+  const Id = asNumber(cell(row, 'Id', 'ID'))
+  const IdJob = asNumber(cell(row, 'IdJob', 'IDJob'))
+  const IdItem = asNumber(cell(row, 'IdItem', 'IDItem'))
+  const ItemQtyGuid = asString(cell(row, 'ItemQtyGuid', 'QtyItemGuid', 'Guid'))
+  if (Id == null || IdJob == null || IdItem == null || !ItemQtyGuid) return null
+  return {
+    Id,
+    IdJob,
+    IdItem,
+    IDItemTracking: asNumber(cell(row, 'IDItemTracking', 'IdItemTracking', 'ItemTracking')),
+    ItemQtyGuid,
+    GuidInUse: asBool(cell(row, 'GuidInUse')) === true,
+  }
 }
 
 @Injectable()
@@ -440,32 +545,21 @@ export class FabshopDbService implements OnModuleInit, OnModuleDestroy {
     return rows[0] ?? null
   }
 
-  /** Items for the job. Seeks PK_Items (IDJob, IDItem), so this stays fast. */
+  /** Every Items column. Only the fields AME uses are kept. */
   async getJobItemsForSync(idJob: number): Promise<FabshopSyncItem[]> {
-    return this.query<FabshopSyncItem>(
+    const rows = await this.query<Record<string, unknown>>(
       `
-      SELECT
-        i.IDItem,
-        i.IDJob,
-        i.PieceNumber,
-        i.Fitting,
-        i.Metal,
-        i.Liner,
-        i.Dimensions,
-        i.Instructions,
-        i.Quantity,
-        i.IsFitting,
-        i.MetricWeight,
-        i.Weight,
-        i.MetricArea,
-        i.Area
-      FROM Items i WITH (NOLOCK)
-      WHERE i.IDJob = @idJob
-      ORDER BY i.IDItem
+      SELECT *
+      FROM Items WITH (NOLOCK)
+      WHERE IDJob = @idJob
     `,
       { idJob },
       60_000,
     )
+    return rows
+      .map((row) => mapSyncItem(row))
+      .filter((row): row is FabshopSyncItem => row != null)
+      .sort((a, b) => a.IDItem - b.IDItem)
   }
 
   /** @deprecated use getJobItemsForSync */
@@ -478,60 +572,38 @@ export class FabshopDbService implements OnModuleInit, OnModuleDestroy {
     return this.getJobItemsForSync(idJob)
   }
 
-  /**
-   * Per-unit tracking rows. Start from Items (PK seek on IDJob) then hash-join
-   * ItemTracking so a missing IDJob index does not full-scan + sort 150k+ rows.
-   */
+  /** Every ItemTracking column for the job. Status text is read when that column exists on the row. */
   async getJobItemTrackingForSync(idJob: number): Promise<FabshopSyncItemTracking[]> {
-    const rows = await this.query<FabshopSyncItemTracking>(
+    const rows = await this.query<Record<string, unknown>>(
       `
-      SELECT
-        it.IDItemTracking,
-        it.IDJob,
-        it.IDItem,
-        it.IDTrackingStatus,
-        ts.strTrackingStatus      AS TrackingStatusName,
-        ts.TrackingStatusSequence AS TrackingStatusSequence,
-        it.TrackingDate,
-        it.PieceNumber,
-        it.Storage,
-        it.Location,
-        it.Container,
-        it.InContainer
-      FROM Items i WITH (NOLOCK)
-      INNER JOIN ItemTracking it WITH (NOLOCK)
-        ON it.IDJob = i.IDJob AND it.IDItem = i.IDItem
-      LEFT JOIN TrackingStatus ts WITH (NOLOCK)
-        ON ts.IDTrackingStatus = it.IDTrackingStatus
-      WHERE i.IDJob = @idJob
-      OPTION (HASH JOIN)
+      SELECT *
+      FROM ItemTracking WITH (NOLOCK)
+      WHERE IDJob = @idJob
     `,
       { idJob },
       45_000,
     )
-    rows.sort((a, b) => a.IDItem - b.IDItem || a.IDItemTracking - b.IDItemTracking)
     return rows
+      .map((row) => mapSyncTracking(row))
+      .filter((row): row is FabshopSyncItemTracking => row != null)
+      .sort((a, b) => a.IDItem - b.IDItem || a.IDItemTracking - b.IDItemTracking)
   }
 
-  /**
-   * QR stickers for a job — every row, printed or not. Seek Items by IDJob,
-   * then hash-join QtyItemGuids (no GuidInUse filter, no ORDER BY).
-   */
+  /** Every QtyItemGuids column. Stickers pair to a tracking row when that id is present. */
   async getJobQrCodesForSync(idJob: number): Promise<FabshopSyncQrCode[]> {
-    const rows = await this.query<FabshopSyncQrCode>(
+    const rows = await this.query<Record<string, unknown>>(
       `
-      SELECT q.Id, q.IdJob, q.IdItem, q.ItemQtyGuid, q.GuidInUse
-      FROM Items i WITH (NOLOCK)
-      INNER JOIN QtyItemGuids q WITH (NOLOCK)
-        ON q.IdJob = i.IDJob AND q.IdItem = i.IDItem
-      WHERE i.IDJob = @idJob
-      OPTION (HASH JOIN)
+      SELECT *
+      FROM QtyItemGuids WITH (NOLOCK)
+      WHERE IdJob = @idJob
     `,
       { idJob },
       45_000,
     )
-    rows.sort((a, b) => a.IdItem - b.IdItem || a.Id - b.Id)
     return rows
+      .map((row) => mapSyncQr(row))
+      .filter((row): row is FabshopSyncQrCode => row != null)
+      .sort((a, b) => a.IdItem - b.IdItem || a.Id - b.Id)
   }
 }
 

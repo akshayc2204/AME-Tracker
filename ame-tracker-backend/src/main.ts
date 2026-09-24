@@ -33,11 +33,6 @@ async function bootstrap() {
   const uploadRoot = config.get<string>('STORAGE_LOCAL_PATH', './uploads')
   app.useStaticAssets(join(process.cwd(), uploadRoot), { prefix: '/uploads/' })
 
-  // Serve installer downloads (no auth — intentionally public)
-  const downloadsDir = join(process.cwd(), 'downloads')
-  app.useStaticAssets(downloadsDir, { prefix: '/downloads/' })
-
-
   // Root endpoint & lightweight reachability check for mobile / LAN discovery (no auth).
   app.getHttpAdapter().get('/', (_req: unknown, res: { json: (body: unknown) => void }) => {
     res.json({

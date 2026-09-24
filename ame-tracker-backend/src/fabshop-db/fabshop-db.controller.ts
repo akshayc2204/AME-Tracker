@@ -93,8 +93,24 @@ export class FabshopDbController {
   }
 
   /**
+   * POST /api/fabshop/sync-new
+   * Fetches every active Trimble job that is not already in AME.
+   */
+  @Post('sync-new')
+  @HttpCode(HttpStatus.OK)
+  @Roles('ADMIN')
+  async syncNewJobs(@CurrentUser() user: AuthUser) {
+    const result = await this.fabshopSync.syncNewJobs(user)
+    const message =
+      result.synced.length === 0
+        ? 'No new Trimble jobs'
+        : `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}`
+    return ok(result, message)
+  }
+
+  /**
    * POST /api/fabshop/sync/:idJob
-   * Triggers a full sync of one FabShop job into the local SQLite DB.
+   * Triggers a full sync of one FabShop job into the AME database.
    * Protected by 3-layer duplicate prevention (in-memory lock + DB lock + upserts).
    */
   @Post('sync/:idJob')

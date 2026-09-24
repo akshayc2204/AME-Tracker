@@ -12,6 +12,6 @@ export function isAbsoluteFolderPath(path: string): boolean {
 }
 
 export const FOLDER_PATH_HINT =
-  'Server path only (e.g. G:\\Data\\ImportData). For files on your PC, use the Sync Agent.';
+  'Server path only (e.g. G:\\Data\\ImportData).';
 
 export const FOLDER_PATH_PLACEHOLDER = 'G:\\Data\\ImportData (on the application server)';

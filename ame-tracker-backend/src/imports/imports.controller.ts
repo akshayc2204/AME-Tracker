@@ -26,7 +26,7 @@ import { ok } from '../common/dto/api-response'
 export class ImportsController {
   constructor(private readonly importsService: ImportsService) {}
 
-  /** Desktop sync agent: ask whether a pair is already in the DB before uploading files. */
+  /** Pre-check: ask whether a pair is already in the DB before uploading files. */
   @Post('check')
   async check(@Body() dto: CheckImportPairDto) {
     return ok(

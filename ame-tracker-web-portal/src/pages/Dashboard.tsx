@@ -5,7 +5,7 @@ import {
   ChevronRight, ArrowUpRight,
   Truck, Smartphone, Monitor, Search,
   FolderKanban, Settings, Layers, Briefcase,
-  Calendar, ChevronDown, X, RefreshCw, Database, AlertCircle,
+  Calendar, ChevronDown, X, RefreshCw, Database,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../store/AppContext';
@@ -506,96 +506,39 @@ function DateFilterBar({
 }
 
 // ─── Main Dashboard Component ─────────────────────────────────────────────────
-// ─── Sync DB Modal ────────────────────────────────────────────────────────────
-interface SyncJob {
-  IDJob: number;
-  JobName: string;
-  IDProject: number;
-  ProjectName: string;
-  IsCompleted: boolean | null;
-  IsActive: boolean | null;
-  LabelColor: number | null;
-  isSyncing: boolean;
-}
-
-interface SyncResult {
-  jobName: string;
-  status: string;
-  itemsInserted: number;
-  itemsUpdated: number;
-  unitsInserted: number;
-  unitsUpdated: number;
-  errors: string[];
-  durationMs: number;
-}
-
 export default function Dashboard() {
   const navigate = useNavigate();
   const { currentUser } = useApp();
   const isAdmin = String(currentUser.role || '').toUpperCase() === 'ADMIN';
 
-  // ── Sync DB Modal state ───────────────────────────────────────────────────
-  const [syncModalOpen, setSyncModalOpen] = useState(false);
-  const [syncJobs, setSyncJobs] = useState<SyncJob[]>([]);
-  const [syncJobsLoading, setSyncJobsLoading] = useState(false);
-  const [syncJobsError, setSyncJobsError] = useState<string | null>(null);
-  const [fabshopConnected, setFabshopConnected] = useState<boolean | null>(null);
-  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
-  const [syncingJobId, setSyncingJobId] = useState<number | null>(null);
-  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [jobSearch, setJobSearch] = useState('');
+  const [syncingDb, setSyncingDb] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
-  async function openSyncModal() {
-    setSyncModalOpen(true);
-    setSyncResult(null);
-    setSyncError(null);
-    setSelectedJobId(null);
-    setJobSearch('');
-    setSyncJobsLoading(true);
-    setSyncJobsError(null);
+  async function syncNewJobs() {
+    if (syncingDb) return;
+    setSyncingDb(true);
+    setSyncNotice(null);
     try {
-      const [status, jobs] = await Promise.all([
-        api.getFabshopStatus().catch(() => null),
-        api.getFabshopSyncableJobs().catch(() => []),
-      ]);
-      setFabshopConnected(status?.connected ?? false);
-      setSyncJobs(jobs ?? []);
-    } catch (err) {
-      setSyncJobsError(err instanceof Error ? err.message : 'Failed to load jobs');
-      setFabshopConnected(false);
-    } finally {
-      setSyncJobsLoading(false);
-    }
-  }
-
-  async function handleSyncJob() {
-    if (!selectedJobId) return;
-    setSyncingJobId(selectedJobId);
-    setSyncResult(null);
-    setSyncError(null);
-    try {
-      const result = await api.syncFromFabshop(selectedJobId);
-      setSyncResult(result);
-      // Refresh dashboard data after successful sync
+      const result = await api.syncNewFromFabshop();
+      if (result.failed.length > 0 && result.synced.length === 0) {
+        setSyncNotice(result.failed[0]?.message || 'Sync failed');
+      } else if (result.synced.length === 0) {
+        setSyncNotice('No new jobs in Trimble');
+      } else {
+        const names = result.synced.map((job) => job.jobName).join(', ');
+        setSyncNotice(
+          result.failed.length > 0
+            ? `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}: ${names}. ${result.failed.length} failed.`
+            : `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}: ${names}`,
+        );
+      }
       await loadDashboard(filterRef.current.from, filterRef.current.to);
     } catch (err) {
-      setSyncError(err instanceof Error ? err.message : 'Sync failed');
+      setSyncNotice(err instanceof Error ? err.message : 'Sync failed');
     } finally {
-      setSyncingJobId(null);
+      setSyncingDb(false);
     }
   }
-
-  const filteredSyncJobs = useMemo(() => {
-    if (!jobSearch.trim()) return syncJobs;
-    const q = jobSearch.toLowerCase();
-    return syncJobs.filter(
-      j =>
-        j.JobName.toLowerCase().includes(q) ||
-        j.ProjectName.toLowerCase().includes(q) ||
-        String(j.IDJob).includes(q),
-    );
-  }, [syncJobs, jobSearch]);
 
   // Date filter state
   const [activePreset, setActivePreset] = useState<PresetId>('today');
@@ -951,9 +894,11 @@ export default function Dashboard() {
         </div>
         {/* ── Sync DB Button (Admin only) ── */}
         {isAdmin && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
           <button
             id="btn-sync-db"
-            onClick={openSyncModal}
+            onClick={syncNewJobs}
+            disabled={syncingDb}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 8,
               padding: '9px 18px', borderRadius: 10,
@@ -967,9 +912,18 @@ export default function Dashboard() {
             onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-1px)')}
             onMouseLeave={e => (e.currentTarget.style.transform = 'translateY(0)')}
           >
-            <Database size={15} />
-            Sync DB
+            {syncingDb ? (
+              <><RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> Syncing…</>
+            ) : (
+              <><Database size={15} /> Sync DB</>
+            )}
           </button>
+          {syncNotice && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: 360, textAlign: 'right' }}>
+              {syncNotice}
+            </span>
+          )}
+          </div>
         )}
       </div>
 
@@ -1389,276 +1343,6 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
-
-      {/* ─── Sync DB Modal ─── */}
-      {syncModalOpen && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 1000,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 20,
-            backdropFilter: 'blur(4px)',
-          }}
-          onClick={e => { if (e.target === e.currentTarget && !syncingJobId) setSyncModalOpen(false); }}
-        >
-          <div style={{
-            background: '#FFFFFF', borderRadius: 16,
-            width: '100%', maxWidth: 560,
-            boxShadow: '0 24px 64px rgba(0,0,0,0.2)',
-            display: 'flex', flexDirection: 'column',
-            maxHeight: '85vh', overflow: 'hidden',
-          }}>
-            {/* Modal Header */}
-            <div style={{
-              padding: '20px 24px 16px',
-              borderBottom: '1px solid #F1F5F9',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{
-                  width: 40, height: 40, borderRadius: 10,
-                  background: 'linear-gradient(135deg, #EFF6FF, #F5F3FF)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: '#1D4ED8',
-                }}>
-                  <Database size={20} />
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#111827' }}>
-                    Sync from TrimbleFabShop
-                  </h3>
-                  <p style={{ margin: '2px 0 0', fontSize: '0.75rem', color: '#6B7280' }}>
-                    Select a job to sync directly from the Trimble database
-                  </p>
-                </div>
-              </div>
-              {!syncingJobId && (
-                <button
-                  onClick={() => setSyncModalOpen(false)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 4, borderRadius: 6 }}
-                >
-                  <X size={18} />
-                </button>
-              )}
-            </div>
-
-            {/* Connection Status Banner */}
-            <div style={{
-              margin: '12px 24px 0',
-              padding: '8px 14px',
-              borderRadius: 8,
-              display: 'flex', alignItems: 'center', gap: 8,
-              fontSize: '0.78rem', fontWeight: 600,
-              background: fabshopConnected === null ? '#F9FAFB' : fabshopConnected ? '#ECFDF5' : '#FEF2F2',
-              color: fabshopConnected === null ? '#6B7280' : fabshopConnected ? '#047857' : '#B91C1C',
-              border: `1px solid ${fabshopConnected === null ? '#E5E7EB' : fabshopConnected ? '#A7F3D0' : '#FECACA'}`,
-            }}>
-              <span style={{
-                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: fabshopConnected === null ? '#D1D5DB' : fabshopConnected ? '#10B981' : '#EF4444',
-                boxShadow: fabshopConnected ? '0 0 0 3px rgba(16,185,129,0.25)' : 'none',
-              }} />
-              {fabshopConnected === null ? 'Checking connection…'
-                : fabshopConnected ? 'TrimbleFabShop connected — read-only'
-                : 'TrimbleFabShop not reachable — check VPN / credentials'}
-            </div>
-
-            {/* Sync Result */}
-            {syncResult && (
-              <div style={{
-                margin: '12px 24px 0',
-                padding: '12px 16px',
-                borderRadius: 10,
-                background: syncResult.status === 'COMPLETED' ? '#ECFDF5' : '#FFFBEB',
-                border: `1px solid ${syncResult.status === 'COMPLETED' ? '#A7F3D0' : '#FDE68A'}`,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  <CheckCircle size={16} color={syncResult.status === 'COMPLETED' ? '#047857' : '#D97706'} />
-                  <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>
-                    Sync {syncResult.status === 'COMPLETED' ? 'Completed' : 'Completed with warnings'}
-                  </span>
-                  <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: '#6B7280' }}>
-                    {(syncResult.durationMs / 1000).toFixed(1)}s
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  {[
-                    { label: 'Items Added', value: syncResult.itemsInserted, color: '#1D4ED8' },
-                    { label: 'Items Updated', value: syncResult.itemsUpdated, color: '#7C3AED' },
-                    { label: 'Units Added', value: syncResult.unitsInserted, color: '#047857' },
-                    { label: 'Units Updated', value: syncResult.unitsUpdated, color: '#D97706' },
-                  ].map(s => (
-                    <div key={s.label} style={{
-                      textAlign: 'center', padding: '6px 12px',
-                      background: '#FFFFFF', borderRadius: 8, border: '1px solid #E5E7EB', flex: '1 1 80px',
-                    }}>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 800, color: s.color }}>{s.value}</div>
-                      <div style={{ fontSize: '0.68rem', color: '#6B7280', fontWeight: 600 }}>{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-                {syncResult.errors.length > 0 && (
-                  <div style={{ marginTop: 8, fontSize: '0.72rem', color: '#B45309' }}>
-                    ⚠ {syncResult.errors.length} warning{syncResult.errors.length > 1 ? 's' : ''}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Sync Error */}
-            {syncError && (
-              <div style={{
-                margin: '12px 24px 0',
-                padding: '10px 14px', borderRadius: 8,
-                background: '#FEF2F2', border: '1px solid #FECACA',
-                display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.78rem', color: '#B91C1C',
-              }}>
-                <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span>{syncError}</span>
-              </div>
-            )}
-
-            {/* Job List */}
-            <div style={{ padding: '12px 24px 0', display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0 }}>
-              {/* Search */}
-              <div style={{ position: 'relative' }}>
-                <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
-                <input
-                  type="text"
-                  placeholder="Search jobs by name, project, or ID…"
-                  value={jobSearch}
-                  onChange={e => setJobSearch(e.target.value)}
-                  disabled={syncingJobId !== null}
-                  style={{
-                    width: '100%', padding: '8px 10px 8px 30px',
-                    borderRadius: 8, border: '1.5px solid #E5E7EB',
-                    fontSize: '0.82rem', color: '#111827', outline: 'none',
-                    boxSizing: 'border-box', background: '#F9FAFB',
-                  }}
-                />
-              </div>
-
-              {/* Job scroll list */}
-              <div style={{ overflowY: 'auto', flex: 1, maxHeight: 280, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {syncJobsLoading ? (
-                  <div style={{ textAlign: 'center', padding: '32px 0', color: '#6B7280', fontSize: '0.82rem' }}>
-                    <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', marginBottom: 8 }} />
-                    <div>Loading jobs from TrimbleFabShop…</div>
-                  </div>
-                ) : syncJobsError ? (
-                  <div style={{ textAlign: 'center', padding: '32px 0', color: '#B91C1C', fontSize: '0.82rem' }}>
-                    <AlertCircle size={18} style={{ marginBottom: 8 }} />
-                    <div>{syncJobsError}</div>
-                  </div>
-                ) : filteredSyncJobs.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '32px 0', color: '#6B7280', fontSize: '0.82rem' }}>
-                    {jobSearch ? 'No jobs match your search' : 'No active jobs found in TrimbleFabShop'}
-                  </div>
-                ) : (
-                  filteredSyncJobs.map(job => {
-                    const isSelected = selectedJobId === job.IDJob;
-                    const isSyncing = syncingJobId === job.IDJob;
-                    return (
-                      <div
-                        key={job.IDJob}
-                        onClick={() => !syncingJobId && !job.isSyncing && setSelectedJobId(job.IDJob)}
-                        style={{
-                          padding: '10px 14px', borderRadius: 10, cursor: syncingJobId ? 'not-allowed' : 'pointer',
-                          border: isSelected ? '2px solid #1D4ED8' : '1.5px solid #E5E7EB',
-                          background: isSelected ? '#EFF6FF' : '#FAFAFA',
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 10, transition: 'all 0.15s ease',
-                          opacity: (syncingJobId && !isSyncing) ? 0.5 : 1,
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 700, fontSize: '0.84rem', color: '#111827', wordBreak: 'break-word' }}>
-                              {job.JobName}
-                            </span>
-                            <span style={{
-                              fontSize: '0.68rem', fontWeight: 600, padding: '1px 7px', borderRadius: 99,
-                              background: '#F3F4F6', color: '#6B7280', border: '1px solid #E5E7EB', flexShrink: 0,
-                            }}>ID: {job.IDJob}</span>
-                          </div>
-                          <div style={{ fontSize: '0.72rem', color: '#6B7280', marginTop: 2 }}>
-                            {job.ProjectName || 'Unknown Project'}
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          {isSyncing && (
-                            <RefreshCw size={13} color="#1D4ED8" style={{ animation: 'spin 1s linear infinite' }} />
-                          )}
-                          {job.isSyncing && !isSyncing && (
-                            <span style={{ fontSize: '0.7rem', color: '#D97706', fontWeight: 600 }}>In Progress</span>
-                          )}
-                          {isSelected && !isSyncing && (
-                            <div style={{
-                              width: 18, height: 18, borderRadius: '50%',
-                              background: '#1D4ED8', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>
-                              <CheckCircle size={12} color="#FFFFFF" />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div style={{
-              padding: '16px 24px',
-              borderTop: '1px solid #F1F5F9',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-            }}>
-              <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>
-                {syncJobs.length > 0 && !syncJobsLoading && (
-                  <span>{filteredSyncJobs.length} of {syncJobs.length} jobs</span>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button
-                  onClick={() => setSyncModalOpen(false)}
-                  disabled={syncingJobId !== null}
-                  style={{
-                    padding: '8px 18px', borderRadius: 8, border: '1.5px solid #E5E7EB',
-                    background: '#FFFFFF', color: '#374151', fontSize: '0.82rem', fontWeight: 600,
-                    cursor: syncingJobId ? 'not-allowed' : 'pointer', opacity: syncingJobId ? 0.5 : 1,
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  id="btn-start-sync"
-                  onClick={handleSyncJob}
-                  disabled={!selectedJobId || syncingJobId !== null || !fabshopConnected}
-                  style={{
-                    padding: '8px 20px', borderRadius: 8, border: 'none',
-                    background: (!selectedJobId || syncingJobId || !fabshopConnected)
-                      ? '#E5E7EB'
-                      : 'linear-gradient(135deg, #1D4ED8 0%, #7C3AED 100%)',
-                    color: (!selectedJobId || syncingJobId || !fabshopConnected) ? '#9CA3AF' : '#FFFFFF',
-                    fontSize: '0.82rem', fontWeight: 700,
-                    cursor: (!selectedJobId || syncingJobId || !fabshopConnected) ? 'not-allowed' : 'pointer',
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {syncingJobId ? (
-                    <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Syncing…</>
-                  ) : (
-                    <><Database size={13} /> Start Sync</>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Spin keyframe */}
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

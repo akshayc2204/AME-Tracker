@@ -4,9 +4,15 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { AuditService } from '../audit/audit.service'
-import { FabshopDbService } from './fabshop-db.service'
+import {
+  FabshopDbService,
+  type FabshopSyncItem,
+  type FabshopSyncItemTracking,
+  type FabshopSyncQrCode,
+} from './fabshop-db.service'
 import {
   findJobBySourceJobId,
   nextJobImportVersion,
@@ -38,8 +44,7 @@ export interface SyncResult {
   durationMs: number
 }
 
-/** Number of FabShop items to process inside a single SQLite transaction.
- *  Keeps each lock window short (< 2 s) even for very large jobs. */
+/** Number of FabShop items to process inside one database transaction. */
 const CHUNK_SIZE = 200
 
 const SYNC_TIMEOUT_MS = 10 * 60 * 1000
@@ -57,6 +62,45 @@ export class FabshopSyncService {
 
   activeSyncs(): number[] {
     return Array.from(this.syncingJobs)
+  }
+
+  /** Fetch Trimble jobs that do not exist in AME yet. */
+  async syncNewJobs(user: AuthUser): Promise<{
+    checked: number
+    synced: { idJob: number; jobName: string; status: string }[]
+    failed: { idJob: number; message: string }[]
+  }> {
+    const jobs = await this.fabshopDb.syncableJobs()
+    const needed = await this.jobsNotInAme(jobs.map((job) => job.IDJob))
+    const synced: { idJob: number; jobName: string; status: string }[] = []
+    const failed: { idJob: number; message: string }[] = []
+
+    for (const idJob of needed) {
+      try {
+        const result = await this.syncJob(idJob, user)
+        synced.push({ idJob, jobName: result.jobName, status: result.status })
+      } catch (err) {
+        failed.push({
+          idJob,
+          message: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    this.logger.log(
+      `[Sync] New jobs — checked ${jobs.length}, fetched ${synced.length}, failed ${failed.length}`,
+    )
+    return { checked: jobs.length, synced, failed }
+  }
+
+  private async jobsNotInAme(idJobs: number[]): Promise<number[]> {
+    if (idJobs.length === 0) return []
+    const rows = await this.prisma.job.findMany({
+      where: { sourceJobId: { in: idJobs.map(String) } },
+      select: { sourceJobId: true },
+    })
+    const present = new Set(rows.map((row) => row.sourceJobId))
+    return idJobs.filter((idJob) => !present.has(String(idJob)))
   }
 
   async syncJob(
@@ -173,21 +217,9 @@ export class FabshopSyncService {
   }
 
   /**
-   * Core sync loop.
-   *
-   * Optimisation strategy for large jobs (thousands of pieces):
-   *  1. Fetch ALL source data from FabShop SQL Server in parallel upfront.
-   *  2. Slice items into chunks of CHUNK_SIZE (200).
-   *  3. Per chunk:
-   *     a. Bulk-fetch existing items    → 1 findMany instead of N findUnique
-   *     b. Bulk-fetch existing units    → 1 findMany for known item IDs
-   *     c. Bulk-fetch QR conflicts      → 1 findMany for all QR codes in chunk
-   *     d. Run all upserts in ONE $transaction  → 1 SQLite commit per chunk
-   *  4. Emit progress callback after each chunk.
-   *  5. Batch-insert importErrors at the end with createMany.
-   *
-   * Result: a 2 000-piece job goes from ~6 000 individual SQLite auto-commits
-   * down to ~10 chunked commits — typically 10–20× faster.
+   * One AME unit per ItemTracking row. QtyItemGuids stickers attach by the
+   * same position within an item. Extra sticker rows and Items.Quantity do
+   * not create parts. A failed tracking or QR read fails the whole sync.
    */
   private async runSync(
     idJob: number,
@@ -195,24 +227,23 @@ export class FabshopSyncService {
     batchId: number,
     onProgress?: (processed: number, total: number) => void,
   ) {
-    // ── 1. Fetch all FabShop source data up-front (parallel where possible) ──
     const fabItems = await this.fabshopDb.getJobItemsForSync(idJob)
 
     const [trackingRows, qrCodes] = await Promise.all([
-      this.fetchOptional(
-        () => this.fabshopDb.getJobItemTrackingForSync(idJob),
-        `tracking rows for IDJob=${idJob}`,
-      ),
-      this.fetchOptional(
-        () => this.fabshopDb.getJobQrCodesForSync(idJob),
-        `QR codes for IDJob=${idJob}`,
-      ),
+      this.fabshopDb.getJobItemTrackingForSync(idJob),
+      this.fabshopDb.getJobQrCodesForSync(idJob),
     ])
 
     this.logger.log(
       `[Sync] IDJob=${idJob} — ${fabItems.length} items, ` +
         `${trackingRows.length} tracking rows, ${qrCodes.length} QR codes`,
     )
+    if (qrCodes.length !== trackingRows.length) {
+      this.logger.warn(
+        `[Sync] IDJob=${idJob} QR rows (${qrCodes.length}) do not match ItemTracking rows (${trackingRows.length}). ` +
+          `Parts follow ItemTracking only.`,
+      )
+    }
 
     const qrByItem = groupBy(qrCodes, (qr) => qr.IdItem)
     const trackingByItem = groupBy(trackingRows, (trk) => trk.IDItem)
@@ -224,70 +255,122 @@ export class FabshopSyncService {
     const allErrors: string[] = []
     const total = fabItems.length
 
-    // ── 2. Process in chunks ─────────────────────────────────────────────────
     for (let chunkStart = 0; chunkStart < fabItems.length; chunkStart += CHUNK_SIZE) {
       const chunk = fabItems.slice(chunkStart, chunkStart + CHUNK_SIZE)
       const chunkSourceIds = chunk.map((r) => r.IDItem)
 
-      // ── 2a. Bulk pre-fetch: existing Item rows for this chunk ──
       const existingItemRows = await this.prisma.item.findMany({
         where: { jobId, sourceItemId: { in: chunkSourceIds } },
         select: { id: true, sourceItemId: true },
       })
       const existingItemMap = new Map(existingItemRows.map((r) => [r.sourceItemId, r.id]))
 
-      // ── 2b. Build the full set of QR codes this chunk will touch ──
-      const allChunkQrCodes: string[] = []
-      for (const row of chunk) {
-        const itemQrs = qrByItem.get(row.IDItem) ?? []
-        const tracking = trackingByItem.get(row.IDItem) ?? []
-        const quantity = row.Quantity && row.Quantity > 0 ? Math.floor(row.Quantity) : 1
-        const unitCount = Math.max(tracking.length, itemQrs.length, quantity, 1)
-        for (let idx = 0; idx < unitCount; idx++) {
-          const qr = itemQrs[idx]
-          allChunkQrCodes.push(
-            (qr ? qr.ItemQtyGuid : `FAB-J${idJob}-I${row.IDItem}-U${idx + 1}`).toLowerCase(),
-          )
-        }
-      }
+      const planned = this.planUnits(idJob, chunk, trackingByItem, qrByItem)
+      const plansByItem = groupBy(planned, (unit) => unit.sourceItemId)
+      const plannedQrCodes = [...new Set(planned.map((unit) => unit.qrCode))]
+      const plannedTrackingIds = [...new Set(planned.map((unit) => unit.trackingId))]
+      const plannedGuidIds = [
+        ...new Set(
+          planned.map((unit) => unit.qtyGuidId).filter((id): id is number => id != null),
+        ),
+      ]
 
-      // ── 2c. Bulk pre-fetch: existing units + QR conflicts (parallel) ──
       const knownItemIds = existingItemRows.map((r) => r.id)
-      const [existingUnitRows, qrConflictRows] = await Promise.all([
+      const [existingUnitRows, qrConflictRows, trackingOwners, guidOwners] = await Promise.all([
         knownItemIds.length > 0
           ? this.prisma.itemUnit.findMany({
               where: { itemId: { in: knownItemIds } },
               select: { id: true, itemId: true, unitIndex: true },
             })
           : Promise.resolve([]),
-        allChunkQrCodes.length > 0
+        plannedQrCodes.length > 0
           ? this.prisma.itemUnit.findMany({
-              where: { qrCode: { in: allChunkQrCodes } },
+              where: { qrCode: { in: plannedQrCodes } },
               select: { id: true, qrCode: true },
             })
           : Promise.resolve([]),
+        plannedTrackingIds.length > 0
+          ? this.prisma.itemUnit.findMany({
+              where: { sourceItemTrackingId: { in: plannedTrackingIds } },
+              select: { id: true, sourceItemTrackingId: true },
+            })
+          : Promise.resolve([] as { id: number; sourceItemTrackingId: number | null }[]),
+        plannedGuidIds.length > 0
+          ? this.prisma.itemUnit.findMany({
+              where: { sourceQtyGuidId: { in: plannedGuidIds } },
+              select: { id: true, sourceQtyGuidId: true },
+            })
+          : Promise.resolve([] as { id: number; sourceQtyGuidId: number | null }[]),
       ])
 
-      // Maps for O(1) lookup inside the transaction
       const existingUnitMap = new Map(
         existingUnitRows.map((u) => [`${u.itemId}-${u.unitIndex}`, u.id]),
       )
-      // qrCode → itemUnit.id that currently owns that QR code
-      const qrConflictMap = new Map(qrConflictRows.map((u) => [u.qrCode, u.id]))
+      const qrOwnerByCode = new Map(qrConflictRows.map((u) => [u.qrCode, u.id]))
+      const trackingOwnerById = new Map(
+        trackingOwners
+          .filter((u) => u.sourceItemTrackingId != null)
+          .map((u) => [u.sourceItemTrackingId as number, u.id]),
+      )
+      const guidOwnerById = new Map(
+        guidOwners
+          .filter((u) => u.sourceQtyGuidId != null)
+          .map((u) => [u.sourceQtyGuidId as number, u.id]),
+      )
 
-      // ── 2d. Single transaction for the entire chunk ──────────────────────
-      let ci = 0, cu = 0, ui = 0, uu = 0
+      const releases = new Map<number, { qr: boolean; tracking: boolean; guid: boolean }>()
+      const markRelease = (unitId: number, field: 'qr' | 'tracking' | 'guid') => {
+        const flags = releases.get(unitId) ?? { qr: false, tracking: false, guid: false }
+        flags[field] = true
+        releases.set(unitId, flags)
+      }
+
+      for (const unit of planned) {
+        const ameItemId = existingItemMap.get(unit.sourceItemId)
+        const targetId =
+          ameItemId != null ? existingUnitMap.get(`${ameItemId}-${unit.unitIndex}`) : undefined
+        const qrOwner = qrOwnerByCode.get(unit.qrCode)
+        if (qrOwner != null && qrOwner !== targetId) markRelease(qrOwner, 'qr')
+        const trackingOwner = trackingOwnerById.get(unit.trackingId)
+        if (trackingOwner != null && trackingOwner !== targetId) markRelease(trackingOwner, 'tracking')
+        if (unit.qtyGuidId != null) {
+          const guidOwner = guidOwnerById.get(unit.qtyGuidId)
+          if (guidOwner != null && guidOwner !== targetId) markRelease(guidOwner, 'guid')
+        }
+      }
+
+      let ci = 0
+      let cu = 0
+      let ui = 0
+      let uu = 0
       const chunkErrors: string[] = []
 
       try {
         await this.prisma.$transaction(
           async (tx) => {
+            for (const [unitId, flags] of releases) {
+              await tx.itemUnit.update({
+                where: { id: unitId },
+                data: {
+                  ...(flags.qr
+                    ? {
+                        qrCode: `stale-${unitId}-${Date.now()}`,
+                        hasSourceQr: 0,
+                        sourceQtyGuidId: null,
+                      }
+                    : {}),
+                  ...(flags.tracking ? { sourceItemTrackingId: null } : {}),
+                  ...(flags.guid ? { sourceQtyGuidId: null } : {}),
+                },
+              })
+            }
+
             for (const row of chunk) {
               const gauge = this.parseGauge(row.Metal)
               const quantity = row.Quantity && row.Quantity > 0 ? Math.floor(row.Quantity) : 1
               const itemTracking = trackingByItem.get(row.IDItem) ?? []
-              const itemQrs = qrByItem.get(row.IDItem) ?? []
               const lead = itemTracking[0]
+              const itemPlans = plansByItem.get(row.IDItem) ?? []
 
               const itemFields = {
                 pieceNumber: row.PieceNumber ?? null,
@@ -303,13 +386,17 @@ export class FabshopSyncService {
                 metricArea: row.MetricArea ?? null,
                 area: row.Area ?? null,
                 gauge,
+                alphaNumber: row.AlphaNumber,
+                drawing: row.Drawing,
+                floor: row.Floor,
+                systemName: row.SystemName,
+                pressure: row.Pressure,
                 trackingStatus: lead?.TrackingStatusName?.trim() || null,
                 statusSequence: lead?.TrackingStatusSequence ?? null,
                 storage: lead?.Storage ?? null,
                 location: lead?.Location ?? null,
                 container: lead?.Container ?? null,
                 inContainer: lead?.InContainer ? 1 : 0,
-                sourceItemTrackingId: lead?.IDItemTracking ?? null,
               }
 
               const isExisting = existingItemMap.has(row.IDItem)
@@ -320,62 +407,38 @@ export class FabshopSyncService {
               })
               isExisting ? cu++ : ci++
 
-              const unitCount = Math.max(itemTracking.length, itemQrs.length, quantity, 1)
-
-              for (let idx = 0; idx < unitCount; idx++) {
-                const unitIndex = idx + 1
-                const qr = itemQrs[idx]
-                const trk = itemTracking[idx]
-                const qrCode = (
-                  qr ? qr.ItemQtyGuid : `FAB-J${idJob}-I${row.IDItem}-U${unitIndex}`
-                ).toLowerCase()
-
-                // Release QR conflict using pre-fetched map (no extra query)
-                const conflictId = qrConflictMap.get(qrCode)
-                const unitKey = `${item.id}-${unitIndex}`
-                const existingUnitId = existingUnitMap.get(unitKey)
-
-                if (conflictId !== undefined && conflictId !== existingUnitId) {
-                  await tx.itemUnit.update({
-                    where: { id: conflictId },
-                    data: {
-                      qrCode: `stale-${conflictId}-${Date.now()}`,
-                      sourceQtyGuidId: null,
-                      hasSourceQr: 0,
-                    },
-                  })
-                  // Prevent double-release if same conflict QR appears again in chunk
-                  qrConflictMap.delete(qrCode)
-                }
-
+              for (const plan of itemPlans) {
+                const trk = itemTracking[plan.unitIndex - 1]
+                const ameKey = `${item.id}-${plan.unitIndex}`
+                const existingUnitId = existingUnitMap.get(ameKey)
                 const unitFields = {
-                  qrCode,
-                  sourceQtyGuidId: qr?.Id ?? null,
-                  guidInUse: qr?.GuidInUse ? 1 : 0,
-                  hasSourceQr: qr ? 1 : 0,
-                  sourceItemTrackingId: trk?.IDItemTracking ?? null,
+                  qrCode: plan.qrCode,
+                  sourceQtyGuidId: plan.qtyGuidId,
+                  guidInUse: plan.guidInUse,
+                  hasSourceQr: plan.hasSourceQr,
+                  sourceItemTrackingId: plan.trackingId,
                   trackingStatus: trk?.TrackingStatusName?.trim() || null,
                   statusSequence: trk?.TrackingStatusSequence ?? null,
-                  trackingDate: trk?.TrackingDate ?? null,
                   storage: trk?.Storage ?? null,
                   location: trk?.Location ?? null,
                   container: trk?.Container ?? null,
                   inContainer: trk?.InContainer ? 1 : 0,
                   pieceNbr: trk?.PieceNumber ?? row.PieceNumber ?? null,
                   fitting: row.Fitting ?? null,
-                  description: row.Instructions ?? null,
-                  scanDate: trk?.TrackingDate ? trk.TrackingDate.toISOString() : null,
-                  component: 0,
-                  backOrdered: row.Instructions ?? null,
+                  description: trk?.Description ?? null,
+                  scanDate: trk?.ScanDate ?? null,
+                  component: trk?.Component ? 1 : 0,
+                  backOrdered: trk?.BackOrdered ?? null,
                 }
 
                 await tx.itemUnit.upsert({
-                  where: { itemId_unitIndex: { itemId: item.id, unitIndex } },
+                  where: { itemId_unitIndex: { itemId: item.id, unitIndex: plan.unitIndex } },
                   create: {
                     itemId: item.id,
                     jobId,
-                    unitIndex,
+                    unitIndex: plan.unitIndex,
                     currentStatus: 'PENDING',
+                    trackingDate: null,
                     ...unitFields,
                   },
                   update: { jobId, ...unitFields },
@@ -383,10 +446,16 @@ export class FabshopSyncService {
 
                 existingUnitId !== undefined ? uu++ : ui++
               }
+
+              await this.removeExtraPendingUnits(tx, item.id, itemTracking.length)
             }
           },
-          { timeout: 60_000 }, // 60 s per chunk — ample for 200 items × N units
+          { timeout: 60_000 },
         )
+        itemsInserted += ci
+        itemsUpdated += cu
+        unitsInserted += ui
+        unitsUpdated += uu
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.logger.error(
@@ -397,13 +466,7 @@ export class FabshopSyncService {
         )
       }
 
-      itemsInserted += ci
-      itemsUpdated += cu
-      unitsInserted += ui
-      unitsUpdated += uu
       allErrors.push(...chunkErrors)
-
-      // ── 3. Emit progress after each chunk ──────────────────────────────
       onProgress?.(Math.min(chunkStart + CHUNK_SIZE, total), total)
     }
 
@@ -424,18 +487,91 @@ export class FabshopSyncService {
     return { itemsInserted, itemsUpdated, unitsInserted, unitsUpdated, errors: allErrors }
   }
 
-  private async fetchOptional<T>(fetch: () => Promise<T[]>, label: string): Promise<T[]> {
-    try {
-      return await fetch()
-    } catch (err) {
-      this.logger.warn(
-        `[Sync] Could not fetch ${label}; continuing without it. ${
-          err instanceof Error ? err.message : err
-        }`,
-      )
-      void this.fabshopDb.resetPool()
-      return []
+  /**
+   * One planned part per ItemTracking row. The sticker at the same position
+   * is attached when present. Quantity and extra QR rows are ignored.
+   */
+  private planUnits(
+    idJob: number,
+    chunk: FabshopSyncItem[],
+    trackingByItem: Map<number, FabshopSyncItemTracking[]>,
+    qrByItem: Map<number, FabshopSyncQrCode[]>,
+  ) {
+    const usedQr = new Set<string>()
+    const usedTracking = new Set<number>()
+    const usedGuid = new Set<number>()
+    const planned: Array<{
+      sourceItemId: number
+      unitIndex: number
+      trackingId: number
+      qrCode: string
+      qtyGuidId: number | null
+      guidInUse: number
+      hasSourceQr: number
+    }> = []
+
+    for (const row of chunk) {
+      const tracking = trackingByItem.get(row.IDItem) ?? []
+      const qrs = qrByItem.get(row.IDItem) ?? []
+      const qrByTrackingId = new Map<number, FabshopSyncQrCode>()
+      for (const qr of qrs) {
+        if (qr.IDItemTracking != null && !qrByTrackingId.has(qr.IDItemTracking)) {
+          qrByTrackingId.set(qr.IDItemTracking, qr)
+        }
+      }
+      tracking.forEach((trk, idx) => {
+        if (usedTracking.has(trk.IDItemTracking)) return
+        usedTracking.add(trk.IDItemTracking)
+
+        const qr = qrByTrackingId.get(trk.IDItemTracking) ?? (qrByTrackingId.size === 0 ? qrs[idx] : undefined)
+        const guidText = qr?.ItemQtyGuid?.trim()
+        let qrCode = guidText ? guidText.toLowerCase() : `fab-j${idJob}-t${trk.IDItemTracking}`
+        let qtyGuidId = guidText ? (qr?.Id ?? null) : null
+        let hasSourceQr = guidText ? 1 : 0
+        let guidInUse = guidText && qr?.GuidInUse ? 1 : 0
+        if (usedQr.has(qrCode) || (qtyGuidId != null && usedGuid.has(qtyGuidId))) {
+          qrCode = `fab-j${idJob}-t${trk.IDItemTracking}`
+          qtyGuidId = null
+          hasSourceQr = 0
+          guidInUse = 0
+        }
+        usedQr.add(qrCode)
+        if (qtyGuidId != null) usedGuid.add(qtyGuidId)
+
+        planned.push({
+          sourceItemId: row.IDItem,
+          unitIndex: idx + 1,
+          trackingId: trk.IDItemTracking,
+          qrCode,
+          qtyGuidId,
+          guidInUse,
+          hasSourceQr,
+        })
+      })
     }
+
+    return planned
+  }
+
+  /** Drop pending parts that are not backed by an ItemTracking row and were never scanned. */
+  private async removeExtraPendingUnits(
+    tx: Prisma.TransactionClient,
+    itemId: number,
+    trackingCount: number,
+  ) {
+    const extras = await tx.itemUnit.findMany({
+      where: { itemId, unitIndex: { gt: trackingCount }, currentStatus: 'PENDING' },
+      select: {
+        id: true,
+        dispatchParts: { select: { id: true }, take: 1 },
+        trackingEvents: { select: { id: true }, take: 1 },
+      },
+    })
+    const removable = extras
+      .filter((unit) => unit.dispatchParts.length === 0 && unit.trackingEvents.length === 0)
+      .map((unit) => unit.id)
+    if (removable.length === 0) return
+    await tx.itemUnit.deleteMany({ where: { id: { in: removable } } })
   }
 
   private async upsertProjectAndJob(fabJob: {

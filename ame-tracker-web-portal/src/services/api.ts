@@ -645,24 +645,6 @@ export const api = {
     ).data;
   },
 
-  async getSyncAgentInfo(): Promise<{
-    available: boolean;
-    filename: string;
-    sizeBytes: number | null;
-    downloadUrl: string | null;
-    instructions: string[];
-  }> {
-    return (
-      await request<{
-        available: boolean;
-        filename: string;
-        sizeBytes: number | null;
-        downloadUrl: string | null;
-        instructions: string[];
-      }>('/downloads/sync-agent')
-    ).data;
-  },
-
   async updateFolderSyncSettings(input: { folderPath?: string; intervalMinutes?: number }) {
 
     return (
@@ -871,7 +853,20 @@ export const api = {
     return (await request<any[]>('/fabshop/syncable-jobs')).data;
   },
 
-  /** Trigger a sync of one FabShop job into local SQLite DB */
+  /** Fetch Trimble jobs that are not already in AME */
+  async syncNewFromFabshop(): Promise<{
+    checked: number;
+    synced: { idJob: number; jobName: string; status: string }[];
+    failed: { idJob: number; message: string }[];
+  }> {
+    return (await request<{
+      checked: number;
+      synced: { idJob: number; jobName: string; status: string }[];
+      failed: { idJob: number; message: string }[];
+    }>('/fabshop/sync-new', { method: 'POST' })).data;
+  },
+
+  /** Trigger a sync of one FabShop job into the AME database */
   async syncFromFabshop(idJob: number): Promise<{
     batchId: number;
     idJob: number;

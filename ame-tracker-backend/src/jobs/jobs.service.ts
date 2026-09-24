@@ -303,7 +303,6 @@ export class JobsService {
           weight: null,
           area: null,
           quantity,
-          sourceItemTrackingId: itemTrackingNo,
           scheduleJson: Object.keys(scheduleExtras).length
             ? JSON.stringify(scheduleExtras)
             : null,

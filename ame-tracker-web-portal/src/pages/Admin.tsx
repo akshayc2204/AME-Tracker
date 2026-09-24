@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Upload, RefreshCw, FolderOpen, CheckCircle, User, Pencil,
-  AlertCircle, Archive, Smartphone, Plus, X, ChevronDown, Download, Monitor, Save,
+  AlertCircle, Archive, Smartphone, Plus, X, ChevronDown, Save,
 } from 'lucide-react';
 
 import { api } from '../services/api';
@@ -107,14 +107,7 @@ export default function Admin() {
   const [opName, setOpName] = useState('');
   const [opEmail, setOpEmail] = useState('');
   const [opPassword, setOpPassword] = useState('');
-  const [syncAgentInfo, setSyncAgentInfo] = useState<{
-    available: boolean;
-    filename: string;
-    sizeBytes: number | null;
-    downloadUrl: string | null;
-    instructions: string[];
-  } | null>(null);
-  const [syncAgentLoading, setSyncAgentLoading] = useState(true);
+
 
 
   function applyUser(user: { fullName?: string; email?: string }) {
@@ -178,13 +171,6 @@ export default function Admin() {
 
   useEffect(() => {
     void load();
-    // Load sync agent download info (separate so it doesn't block the rest)
-    setSyncAgentLoading(true);
-    api.getSyncAgentInfo()
-      .then(setSyncAgentInfo)
-      .catch(() => setSyncAgentInfo(null))
-      .finally(() => setSyncAgentLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -644,79 +630,7 @@ export default function Admin() {
 
       <div className="admin-section-label">Imports</div>
 
-      {/* ── Download Sync Agent card ── */}
-      <div className="card admin-panel admin-download-card">
-        <div className="card-header">
-          <div className="admin-panel-heading">
-            <div className="admin-icon-badge is-indigo">
-              <Monitor size={16} />
-            </div>
-            <div>
-              <div className="card-title">Desktop Sync Agent</div>
-              <div className="card-subtitle">
-                Windows desktop app that watches your ImportData folder and uploads jobs automatically.
-              </div>
-            </div>
-          </div>
-          {syncAgentLoading ? (
-            <RefreshCw size={16} className="animate-spin" style={{ color: 'var(--muted)' }} />
-          ) : syncAgentInfo?.available ? (
-            <a
-              href={`${(import.meta.env.VITE_API_URL || 'http://localhost:3000/api').replace(/\/api$/, '')}/api/downloads/sync-agent/file`}
-              download
-              className="btn btn-primary btn-sm"
-              style={{ textDecoration: 'none' }}
-            >
-              <Download size={14} />
-              Download
-            </a>
-          ) : (
-            <span className="badge badge-pending" style={{ fontSize: '0.72rem' }}>Not uploaded yet</span>
-          )}
-        </div>
 
-        <div className="card-body admin-stack">
-          {/* File info row */}
-          {syncAgentInfo?.available && (
-            <div className="admin-sync-stats">
-              <div className="admin-sync-stat">
-                <span>File</span>
-                <strong style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{syncAgentInfo.filename}</strong>
-              </div>
-              {syncAgentInfo.sizeBytes != null && (
-                <div className="admin-sync-stat">
-                  <span>Size</span>
-                  <strong>{(syncAgentInfo.sizeBytes / 1_048_576).toFixed(1)} MB</strong>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Setup instructions */}
-          <div className="admin-download-instructions">
-            <div className="admin-field-label" style={{ marginBottom: 8 }}>Setup instructions</div>
-            <ol className="admin-download-steps">
-              {(syncAgentInfo?.instructions ?? [
-                'Download and run the installer on the Windows PC that holds the ImportData folder.',
-                'Open the Sync Agent, enter the portal URL and your admin credentials.',
-                'Pick the ImportData folder — the agent will automatically upload new jobs every few minutes.',
-              ]).map((step, i) => (
-                <li key={i}>{step}</li>
-              ))}
-            </ol>
-          </div>
-
-          {!syncAgentInfo?.available && !syncAgentLoading && (
-            <div className="admin-msg is-error" style={{ marginTop: 4 }}>
-              <AlertCircle size={15} />
-              The installer file (<code>AME-Tracker-Sync-Agent-Setup.exe</code>) has not been placed in the server&apos;s
-              {' '}<code>downloads/</code> folder yet. Build the sync agent with{' '}
-              <code>npm run dist</code> in <code>ame-tracker-sync-agent/</code> and copy the{' '}
-              <code>.exe</code> from its <code>dist/</code> folder to the backend&apos;s <code>downloads/</code> directory.
-            </div>
-          )}
-        </div>
-      </div>
 
       <div className="card admin-panel admin-sync-panel">
         <div className="card-header">

@@ -67,5 +67,3 @@ ame-tracker-mobile/ios/
 *.AppImage
 *.deb
 *.rpm
-ame-tracker-backend/downloads/*.exe
-ame-tracker-backend/downloads/*.msi

@@ -71,7 +71,7 @@ export class ImportsService {
   }
 
   /**
-   * Import a paired .t4vjob + Item Schedule upload from the desktop sync agent.
+   * Import a paired .t4vjob + Item Schedule upload from folder upload.
    * Dedups by content hash (FileSync) and by existing job data.
    */
   async importFromUploadPair(
@@ -325,7 +325,7 @@ export class ImportsService {
   }
 
   /**
-   * Lightweight pre-check for the desktop sync agent — no file upload needed.
+   * Lightweight pre-check for folder upload — no file upload needed.
    * Skip when this exact pair hash was already synced, or the job already has items
    * (unless tracking-export columns are still missing).
    */
@@ -775,10 +775,6 @@ export class ImportsService {
           : `sched-j${jobId}-i${row.sourceItemId}-u${unitIndex}`
       ).toLowerCase()
 
-      const trackingJson =
-        trk?.extras && Object.keys(trk.extras).length > 0
-          ? JSON.stringify(trk.extras)
-          : null
       const unitFields = {
         qrCode,
         sourceItemTrackingId:
@@ -795,7 +791,6 @@ export class ImportsService {
         scanDate: trk?.scanDate ?? null,
         component: trk?.component ? 1 : 0,
         backOrdered: trk?.backOrdered ?? null,
-        trackingJson,
       }
 
       if (unitFields.sourceItemTrackingId != null) {
@@ -875,7 +870,7 @@ export class ImportsService {
         sourceLabel: isFolderSync
           ? fileBasenames.join(' + ') || 'Folder sync'
           : isAgentSync
-            ? fileBasenames.join(' + ') || 'Sync agent'
+            ? fileBasenames.join(' + ') || 'Folder upload'
             : isDbSync
               ? `Trimble Job ${idJobMatch?.[1] ?? b.job?.sourceJobId ?? '—'}`
               : fileBasenames.join(' + ') || 'File upload',
