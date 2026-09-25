@@ -7,8 +7,8 @@ import { api } from '../services/api';
 export default function Login() {
   const navigate = useNavigate();
   const { setCurrentUser } = useApp();
-  const [email, setEmail] = useState('admin@ame.local');
-  const [password, setPassword] = useState('Admin@123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,7 +19,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const data = await api.login(email.trim(), password);
+      const data = await api.login(username.trim(), password);
       if (data?.user) {
         setCurrentUser({
           id: String(data.user.id),
@@ -32,7 +32,7 @@ export default function Login() {
         return;
       }
     } catch (err: any) {
-      setError(err?.message || 'Invalid email or password.');
+      setError(err?.message || 'Invalid username or password.');
     } finally {
       setLoading(false);
     }
@@ -66,17 +66,18 @@ export default function Login() {
           </p>
         </div>
 
-        <form className="login-form" onSubmit={handleLogin}>
+        <form className="login-form" onSubmit={handleLogin} autoComplete="off">
           <div className="form-group">
-            <label className="form-label">Email Address</label>
+            <label className="form-label">Username</label>
             <input
               className="form-input"
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="admin@ame.local"
+              type="text"
+              name="username"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              placeholder="Username"
               required
-              autoComplete="email"
+              autoComplete="off"
             />
           </div>
 
@@ -90,7 +91,8 @@ export default function Login() {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
-                autoComplete="current-password"
+                autoComplete="off"
+                name="password"
                 style={{ paddingRight: 40 }}
               />
               <button
@@ -155,25 +157,6 @@ export default function Login() {
           </button>
         </form>
 
-        <div className="login-demo-hint" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 2 }}>Quick Access Credentials</span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ color: 'var(--text-secondary)', fontSize: 12, width: '100%', justifyContent: 'center', background: '#F8FAFC', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 10px' }}
-            onClick={() => { setEmail('admin@ame.local'); setPassword('Admin@123'); }}
-          >
-            System Admin: <strong style={{ marginLeft: 4, color: 'var(--text-primary)' }}>admin@ame.local</strong>
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ color: 'var(--text-muted)', fontSize: 11, width: '100%', justifyContent: 'center', background: '#F8FAFC', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px' }}
-            onClick={() => { setEmail('admin@ametracker.local'); setPassword('Password123!'); }}
-          >
-            Dev Admin: <strong style={{ marginLeft: 4, color: 'var(--text-secondary)' }}>admin@ametracker.local</strong>
-          </button>
-        </div>
       </div>
     </div>
   );

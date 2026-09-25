@@ -12,29 +12,40 @@ export class JobsService {
   ) {}
 
   async list(search?: string, projectId?: number) {
-    const jobs = await this.prisma.job.findMany({
-      where: {
-        ...(projectId ? { projectId: Number(projectId) } : {}),
-        ...(search
-          ? {
-              OR: [
-                { sourceJobId: { contains: search } },
-                { jobName: { contains: search } },
-              ],
-            }
-          : {}),
-      },
-      include: {
-        project: true,
-        _count: { select: { itemUnits: true } },
-        itemUnits: {
-          select: { currentStatus: true },
-        },
-      },
-      orderBy: { id: 'desc' },
-    })
+    const where = {
+      ...(projectId ? { projectId: Number(projectId) } : {}),
+      ...(search
+        ? {
+            OR: [
+              { sourceJobId: { contains: search } },
+              { jobName: { contains: search } },
+            ],
+          }
+        : {}),
+    }
 
-    return jobs.map((job) => this.mapJobListRow(job))
+    const [jobs, groups] = await Promise.all([
+      this.prisma.job.findMany({
+        where,
+        include: { project: true },
+        orderBy: { id: 'desc' },
+      }),
+      this.prisma.itemUnit.groupBy({
+        by: ['jobId', 'currentStatus'],
+        where: projectId ? { job: { projectId: Number(projectId) } } : undefined,
+        _count: { _all: true },
+      }),
+    ])
+
+    const counts = new Map<number, { total: number; shipped: number }>()
+    for (const row of groups) {
+      const current = counts.get(row.jobId) ?? { total: 0, shipped: 0 }
+      current.total += row._count._all
+      if (row.currentStatus === 'SHIPPED') current.shipped += row._count._all
+      counts.set(row.jobId, current)
+    }
+
+    return jobs.map((job) => this.mapJobListRow(job, counts.get(job.id)))
   }
 
   async listArchives() {
@@ -422,12 +433,11 @@ export class JobsService {
       importVersion: number
       createdAt: Date
       project: { id: number; projectName: string } | null
-      _count: { itemUnits: number }
-      itemUnits: Array<{ currentStatus: string }>
     },
+    stats?: { total: number; shipped: number },
   ) {
-    const totalParts = job._count.itemUnits
-    const shippedParts = job.itemUnits.filter((u) => u.currentStatus === 'SHIPPED').length
+    const totalParts = stats?.total ?? 0
+    const shippedParts = stats?.shipped ?? 0
     const pendingParts = totalParts - shippedParts
     const status = totalParts > 0 && pendingParts === 0 ? 'SHIPPED' : 'ACTIVE'
 

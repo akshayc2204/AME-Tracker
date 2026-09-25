@@ -525,11 +525,10 @@ export default function Dashboard() {
       } else if (result.synced.length === 0) {
         setSyncNotice('No new jobs in Trimble');
       } else {
-        const names = result.synced.map((job) => job.jobName).join(', ');
         setSyncNotice(
           result.failed.length > 0
-            ? `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}: ${names}. ${result.failed.length} failed.`
-            : `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}: ${names}`,
+            ? `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}. ${result.failed.length} failed.`
+            : `Fetched ${result.synced.length} new job${result.synced.length === 1 ? '' : 's'}.`,
         );
       }
       await loadDashboard(filterRef.current.from, filterRef.current.to);
@@ -560,6 +559,7 @@ export default function Dashboard() {
   // Dashboard data state
   const [liveKpi, setLiveKpi] = useState<any>(null);
   const [liveJobs, setLiveJobs] = useState<any[]>([]);
+  const [showAllJobs, setShowAllJobs] = useState(false);
   const [liveEvents, setLiveEvents] = useState<TrackingFeedItem[]>([]);
   const [eventSourceFilter, setEventSourceFilter] = useState<'ALL' | 'MOBILE' | 'PORTAL'>('ALL');
   const [eventSearch, setEventSearch] = useState('');
@@ -854,6 +854,11 @@ export default function Dashboard() {
     },
   ];
 
+  const visibleJobs = useMemo(() => {
+    const latest = [...liveJobs].sort((a, b) => Number(b.id) - Number(a.id));
+    return showAllJobs ? latest : latest.slice(0, 10);
+  }, [liveJobs, showAllJobs]);
+
   // Filtered live events — always scoped to the selected dashboard date range
   const filteredEvents = useMemo(() => {
     return liveEvents.filter(ev => {
@@ -919,7 +924,7 @@ export default function Dashboard() {
             )}
           </button>
           {syncNotice && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: 360, textAlign: 'right' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: 280, textAlign: 'right', lineHeight: 1.4 }}>
               {syncNotice}
             </span>
           )}
@@ -1277,9 +1282,21 @@ export default function Dashboard() {
           <div>
             <div className="card-title" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>Jobs</div>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/projects')} style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
-            View All Projects <ChevronRight size={14} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {liveJobs.length > 10 && (
+              <button
+                className="btn btn-ghost btn-sm"
+                type="button"
+                onClick={() => setShowAllJobs((open) => !open)}
+                style={{ fontSize: '0.8125rem', fontWeight: 600 }}
+              >
+                {showAllJobs ? 'Show less' : `View all (${liveJobs.length})`}
+              </button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/projects')} style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
+              View All Projects <ChevronRight size={14} />
+            </button>
+          </div>
         </div>
         <div className="table-wrapper">
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.8125rem' }}>
@@ -1300,7 +1317,7 @@ export default function Dashboard() {
                   </td>
                 </tr>
               ) : (
-                liveJobs.map((job) => {
+                visibleJobs.map((job) => {
                   const jobStatus = jobLiveStatus(job);
                   return (
                   <tr

@@ -16,13 +16,14 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase().trim() },
+    const username = dto.email.trim()
+    const user = await this.prisma.user.findFirst({
+      where: { email: { equals: username, mode: 'insensitive' } },
     })
     if (!user || user.isActive !== 1) {
       throw new UnauthorizedException({
         errorCode: 'INVALID_CREDENTIALS',
-        message: 'Invalid email or password',
+        message: 'Invalid username or password',
       })
     }
 
@@ -30,7 +31,7 @@ export class AuthService {
     if (!valid) {
       throw new UnauthorizedException({
         errorCode: 'INVALID_CREDENTIALS',
-        message: 'Invalid email or password',
+        message: 'Invalid username or password',
       })
     }
 
@@ -138,7 +139,7 @@ export class AuthService {
     }
 
     const nextName = (dto.fullName ?? dto.name)?.trim()
-    const nextEmail = dto.email?.trim().toLowerCase()
+    const nextEmail = dto.email?.trim()
     const data: { name?: string; email?: string; passwordHash?: string } = {}
 
     if (nextName) {
@@ -153,7 +154,7 @@ export class AuthService {
       if (taken && taken.id !== userId) {
         throw new ConflictException({
           errorCode: 'EMAIL_IN_USE',
-          message: 'That email is already used by another account',
+          message: 'That username is already used by another account',
         })
       }
       data.email = nextEmail
@@ -172,7 +173,7 @@ export class AuthService {
     if (!data.name && !data.email && !data.passwordHash) {
       throw new BadRequestException({
         errorCode: 'NOTHING_TO_UPDATE',
-        message: 'Enter a new role, email, or password to save',
+        message: 'Enter a new role, username, or password to save',
       })
     }
 

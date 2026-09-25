@@ -33,15 +33,15 @@ export class UsersService {
     name?: string
     role?: string
   }) {
-    const email = data.email.toLowerCase().trim()
-    const taken = await this.prisma.user.findUnique({
-      where: { email },
+    const email = data.email.trim()
+    const taken = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
       select: { id: true },
     })
     if (taken) {
       throw new ConflictException({
         errorCode: 'EMAIL_IN_USE',
-        message: 'That email is already used by another account',
+        message: 'That username is already used by another account',
       })
     }
 
@@ -87,7 +87,7 @@ export class UsersService {
     }
 
     const nextName = (data.fullName ?? data.name)?.trim()
-    const nextEmail = data.email?.trim().toLowerCase()
+    const nextEmail = data.email?.trim()
     const nextPassword = data.newPassword ?? data.password
     const patch: {
       name?: string
@@ -108,14 +108,14 @@ export class UsersService {
     }
 
     if (nextEmail && nextEmail !== user.email) {
-      const taken = await this.prisma.user.findUnique({
-        where: { email: nextEmail },
+      const taken = await this.prisma.user.findFirst({
+        where: { email: { equals: nextEmail, mode: 'insensitive' } },
         select: { id: true },
       })
       if (taken && taken.id !== id) {
         throw new ConflictException({
           errorCode: 'EMAIL_IN_USE',
-          message: 'That email is already used by another account',
+          message: 'That username is already used by another account',
         })
       }
       patch.email = nextEmail
@@ -148,7 +148,7 @@ export class UsersService {
     ) {
       throw new BadRequestException({
         errorCode: 'NOTHING_TO_UPDATE',
-        message: 'Enter a new name, email, or password to save',
+        message: 'Enter a new name, username, or password to save',
       })
     }
 

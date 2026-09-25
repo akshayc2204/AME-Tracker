@@ -114,13 +114,40 @@ async function probeBaseUrl(baseUrl: string): Promise<boolean> {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     })
-    // Any HTTP response means the API host is reachable.
-    return response.status > 0
+    if (!response.ok) return false
+    const body = (await response.json()) as { success?: boolean; data?: { service?: string } }
+    return body?.success === true && body?.data?.service === 'ame-tracker-api'
   } catch {
     return false
   } finally {
     clearTimeout(timer)
   }
+}
+
+function firstSuccessfulProbe(urls: string[]): Promise<string | null> {
+  if (!urls.length) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const settled: Array<boolean | undefined> = new Array(urls.length)
+    let done = false
+    const finish = (url: string | null) => {
+      if (done) return
+      done = true
+      resolve(url)
+    }
+    urls.forEach((url, index) => {
+      void probeBaseUrl(url).then((ok) => {
+        settled[index] = ok
+        for (let i = 0; i < settled.length; i++) {
+          if (settled[i] === undefined) return
+          if (settled[i]) {
+            finish(urls[i])
+            return
+          }
+        }
+        finish(null)
+      })
+    })
+  })
 }
 
 async function discoverWorkingBaseUrl(prefer?: string | null): Promise<string> {
@@ -138,13 +165,9 @@ async function discoverWorkingBaseUrl(prefer?: string | null): Promise<string> {
     console.log('[api] probing candidates =', ordered)
   }
 
-  // Probe in parallel; pick the first success in preferred order.
-  const probes = ordered.map(async (url) => {
-    const ok = await probeBaseUrl(url)
-    return ok ? url : null
-  })
-  const results = await Promise.all(probes)
-  const winner = results.find((url): url is string => !!url)
+  // Probe in parallel, but return as soon as the earliest preferred host answers.
+  // Later timeouts must not hold up a host that already succeeded.
+  const winner = await firstSuccessfulProbe(ordered)
 
   if (!winner) {
     throw new ApiClientError(

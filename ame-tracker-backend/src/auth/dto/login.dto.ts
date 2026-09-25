@@ -1,5 +1,4 @@
 import {
-  IsEmail,
   IsOptional,
   IsString,
   MaxLength,
@@ -7,7 +6,9 @@ import {
 } from 'class-validator'
 
 export class LoginDto {
-  @IsEmail()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
   email!: string
 
   @IsString()
@@ -40,7 +41,9 @@ export class UpdateProfileDto {
   name?: string
 
   @IsOptional()
-  @IsEmail()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
   email?: string
 
   @IsOptional()

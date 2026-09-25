@@ -68,14 +68,27 @@ export class ProductsService {
           item: true,
           job: { include: { project: true } },
           dispatchParts: {
-            include: {
-              dispatch: true,
-              loader: { select: { id: true, name: true } },
+            take: 1,
+            orderBy: { loadedAt: 'desc' },
+            select: {
+              loadedAt: true,
+              dispatch: { select: { completedAt: true } },
             },
           },
           trackingEvents: {
             orderBy: { createdAt: 'desc' },
-            take: 5,
+            take: 1,
+            select: {
+              id: true,
+              eventType: true,
+              status: true,
+              source: true,
+              vehicleNumber: true,
+              reason: true,
+              dispatchId: true,
+              createdAt: true,
+              qrCode: true,
+            },
           },
         },
       }),
