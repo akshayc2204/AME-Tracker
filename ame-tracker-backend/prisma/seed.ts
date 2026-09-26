@@ -75,9 +75,17 @@ const sampleUnits: DummyUnitSeed[] = [
 
 async function main() {
   const adminPassword = await bcrypt.hash('Admin@123', 10)
+  const operatorPassword = await bcrypt.hash('Operator@123', 10)
 
   await prisma.user.deleteMany({
-    where: { NOT: { email: { equals: 'AME_admin', mode: 'insensitive' } } },
+    where: {
+      NOT: {
+        email: {
+          in: ['AME_admin', 'Operator'],
+          mode: 'insensitive',
+        },
+      },
+    },
   })
 
   const defaultAdmin = await prisma.user.upsert({
@@ -93,6 +101,23 @@ async function main() {
       name: 'AME_admin',
       passwordHash: adminPassword,
       role: 'ADMIN',
+      isActive: 1,
+    },
+  })
+
+  const defaultOperator = await prisma.user.upsert({
+    where: { email: 'Operator' },
+    update: {
+      name: 'Operator',
+      passwordHash: operatorPassword,
+      role: 'OPERATOR',
+      isActive: 1,
+    },
+    create: {
+      email: 'Operator',
+      name: 'Operator',
+      passwordHash: operatorPassword,
+      role: 'OPERATOR',
       isActive: 1,
     },
   })
@@ -174,6 +199,7 @@ async function main() {
   // eslint-disable-next-line no-console
   console.log('Seed completed successfully:', {
     admin: defaultAdmin.email,
+    operator: defaultOperator.email,
     project: project.projectName,
     job: job.sourceJobId,
     itemsCount: sampleUnits.length,
