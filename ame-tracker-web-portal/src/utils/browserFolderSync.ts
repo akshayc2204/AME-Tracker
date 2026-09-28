@@ -83,16 +83,20 @@ export function groupFilesIntoPairs(files: File[]): LocalFolderPair[] {
     // Skip temp/hidden files
     if (name.startsWith('~$') || name.startsWith('.')) continue;
 
-    if (lower.endsWith('.t4vjob')) {
-      const key = name.slice(0, -7).trim();
+    const isT4vjob = /\.t4vjob(?:\s*\(\d+\)|\s*-\s*copy.*)?$/i.test(name) || lower.endsWith('.t4vjob');
+    const isXlsx = /\.(xlsx|xls)(?:\s*\(\d+\)|\s*-\s*copy.*)?$/i.test(name) || lower.endsWith('.xlsx') || lower.endsWith('.xls');
+
+    if (isT4vjob) {
+      let key = name.replace(/\.t4vjob.*/i, '').replace(/\s*\(\d+\)$/i, '').replace(/\s*-\s*copy.*/i, '').trim();
+      if (!key) key = name;
       const existing = map.get(key) || { t4vjob: null, xlsx: null };
-      existing.t4vjob = file;
+      if (!existing.t4vjob) existing.t4vjob = file;
       map.set(key, existing);
-    } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
-      const ext = lower.endsWith('.xlsx') ? 5 : 4;
-      const key = name.slice(0, -ext).trim();
+    } else if (isXlsx) {
+      let key = name.replace(/\.(xlsx|xls).*/i, '').replace(/\s*\(\d+\)$/i, '').replace(/\s*-\s*copy.*/i, '').trim();
+      if (!key) key = name;
       const existing = map.get(key) || { t4vjob: null, xlsx: null };
-      existing.xlsx = file;
+      if (!existing.xlsx) existing.xlsx = file;
       map.set(key, existing);
     }
   }

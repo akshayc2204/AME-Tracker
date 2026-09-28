@@ -1119,6 +1119,11 @@ export const api = {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   },
+
+  /** Get persistent import batch history */
+  async getImportBatches(): Promise<any[]> {
+    return (await request<any[]>('/imports')).data;
+  },
 };
 
 

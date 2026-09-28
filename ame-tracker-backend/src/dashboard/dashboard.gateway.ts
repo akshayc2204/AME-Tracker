@@ -65,6 +65,11 @@ export class DashboardGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.server?.to(DASHBOARD_ROOM).emit('dashboard:dispatch_complete', event)
   }
 
+  /** Broadcast import completion to all dashboard listeners */
+  emitImportComplete(event: { jobCode?: string; jobName?: string; itemsImported?: number; unitsImported?: number }) {
+    this.server?.to(DASHBOARD_ROOM).emit('dashboard:import_complete', event)
+  }
+
   /** Number of currently connected dashboard clients */
   get connectedClients(): number {
     return this.server?.sockets?.sockets?.size ?? 0

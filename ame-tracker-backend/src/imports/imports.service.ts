@@ -8,6 +8,7 @@ import {
 import { createHash } from 'crypto'
 import { PrismaService } from '../prisma/prisma.service'
 import { AuditService } from '../audit/audit.service'
+import { DashboardGateway } from '../dashboard/dashboard.gateway'
 import {
   findJobBySourceJobId,
   nextJobImportVersion,
@@ -40,6 +41,7 @@ export class ImportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly dashboardGateway: DashboardGateway,
   ) {}
 
 
@@ -101,15 +103,23 @@ export class ImportsService {
       })
     }
 
-    const pairKeyT4 = basename(t4vjobName, t4Ext)
-    const pairKeyXlsx = basename(xlsxName, xlsxExt)
-    if (pairKeyT4 !== pairKeyXlsx) {
+    const cleanKey = (filename: string) => {
+      return filename
+        .replace(/\.(t4vjob|xlsx|xls).*/i, '')
+        .replace(/\s*\(\d+\)$/i, '')
+        .replace(/\s*-\s*copy.*/i, '')
+        .trim()
+    }
+
+    const pairKeyT4 = cleanKey(t4vjobName)
+    const pairKeyXlsx = cleanKey(xlsxName)
+    if (pairKeyT4 !== pairKeyXlsx && t4vjobName !== xlsxName) {
       throw new BadRequestException({
         errorCode: 'PAIR_MISMATCH',
         message: `File basenames must match (got "${pairKeyT4}" and "${pairKeyXlsx}")`,
       })
     }
-    const pairKey = pairKeyT4
+    const pairKey = pairKeyT4 || pairKeyXlsx
 
     const t4vjobHash = createHash('sha256').update(files.t4vjobBuffer).digest('hex')
     const xlsxHash = createHash('sha256').update(files.xlsxBuffer).digest('hex')
@@ -264,6 +274,13 @@ export class ImportsService {
           itemsImported: summary.itemsImported,
           unitsImported: summary.unitsImported,
         },
+      })
+
+      this.dashboardGateway.emitImportComplete({
+        jobCode: summary.jobCode,
+        jobName: summary.jobName,
+        itemsImported: summary.itemsImported,
+        unitsImported: summary.unitsImported,
       })
 
       return {

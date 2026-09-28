@@ -812,11 +812,21 @@ export default function Dashboard() {
       scheduleDashboardRefresh();
     };
 
+    const onImportComplete = (ev: { jobCode?: string; jobName?: string; itemsImported?: number; unitsImported?: number }) => {
+      setSocketToast({
+        message: `✓ Job ${ev.jobName || ev.jobCode || ''} imported (${ev.itemsImported || 0} items / ${ev.unitsImported || 0} pieces)`,
+        type: 'complete',
+      });
+      setTimeout(() => setSocketToast(null), 5000);
+      scheduleDashboardRefresh();
+    };
+
     sock.on('connect', onConnect);
     sock.on('disconnect', onDisconnect);
     sock.on('dashboard:scan', onScan);
     sock.on('dashboard:kpi', onKpi);
     sock.on('dashboard:dispatch_complete', onDispatchComplete);
+    sock.on('dashboard:import_complete', onImportComplete);
 
     // Reflect current connection state immediately
     if (sock.connected) setIsLive(true);
@@ -827,6 +837,7 @@ export default function Dashboard() {
       sock.off('dashboard:scan', onScan);
       sock.off('dashboard:kpi', onKpi);
       sock.off('dashboard:dispatch_complete', onDispatchComplete);
+      sock.off('dashboard:import_complete', onImportComplete);
     };
   }, []);
   // ─────────────────────────────────────────────────────────────────────────

@@ -417,15 +417,23 @@ export class ProductsService {
       (dispatch ? `Dispatch #${String(dispatch.id).padStart(4, '0')}` : '—')
 
     await this.prisma.$transaction(async (tx) => {
-      // A part that is not SHIPPED cannot belong to a dispatch. Releasing on every
-      // PENDING write (not just the SHIPPED -> PENDING edge) also repairs units that
-      // an earlier failed revert left linked to a dispatch.
+      // Only release unit from OPEN dispatches so completed transit manifests are preserved.
       if (normalized === 'PENDING') {
-        await tx.dispatchPart.deleteMany({ where: { itemUnitId: unit.id } })
+        await tx.dispatchPart.deleteMany({
+          where: {
+            itemUnitId: unit.id,
+            dispatch: { status: 'OPEN' },
+          },
+        })
       }
 
       if (normalized === 'SHIPPED' && dispatch) {
-        await tx.dispatchPart.deleteMany({ where: { itemUnitId: unit.id } })
+        await tx.dispatchPart.deleteMany({
+          where: {
+            itemUnitId: unit.id,
+            dispatch: { status: 'OPEN' },
+          },
+        })
         await tx.dispatchPart.create({
           data: {
             dispatchId: dispatch.id,

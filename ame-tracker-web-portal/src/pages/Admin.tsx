@@ -156,6 +156,28 @@ export default function Admin() {
     }
   }
 
+  async function loadImportHistory() {
+    try {
+      const batches = await api.getImportBatches();
+      if (Array.isArray(batches) && batches.length > 0) {
+        const persistentPairs: LocalFolderPair[] = batches.map((b) => ({
+          pairKey: b.jobCodeHint || b.jobName || `Job #${b.id}`,
+          t4vjobFile: b.t4vjobFilename ? new File([], b.t4vjobFilename) : null,
+          xlsxFile: b.jobReportFilename ? new File([], b.jobReportFilename) : null,
+          sourceJobId: b.jobCodeHint || String(b.id),
+          jobName: b.jobName || b.jobCodeHint || 'Imported Job',
+          status: b.status === 'FAILED' ? 'FAILED' : 'SYNCED',
+          itemsImported: b.matchedRows || 0,
+          unitsImported: b.totalFabshopRows || b.matchedRows || 0,
+          message: b.sourceLabel ? `Imported (${b.sourceLabel})` : 'Imported and stored in database',
+          lastSyncedAt: b.completedAt || b.createdAt,
+        }));
+        setFolderPairs((prev) => (prev.length === 0 ? persistentPairs : prev));
+        setFolderJobsOpen(true);
+      }
+    } catch {}
+  }
+
   async function load() {
     setArchivesLoading(true);
     try {
@@ -163,6 +185,7 @@ export default function Admin() {
         api.getMe().catch(() => null),
         api.getJobArchives().catch(() => []),
         loadOperators(),
+        loadImportHistory(),
       ]);
       if (me) applyUser(me);
       if (Array.isArray(archives)) setArchivedJobs(archives);

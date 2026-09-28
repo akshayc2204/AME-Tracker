@@ -110,11 +110,10 @@ export class TransitsService {
         creator: { select: { id: true, name: true, email: true } },
         job: { include: { project: true } },
         dispatchParts: {
-          // A part sent back to Active from the portal is no longer on this dispatch.
-          where: { itemUnit: { currentStatus: 'SHIPPED' } },
           select: {
             itemUnit: {
               select: {
+                currentStatus: true,
                 job: {
                   select: {
                     jobName: true,
@@ -134,8 +133,13 @@ export class TransitsService {
     const items = dispatches.map((d) => {
       const projectsSet = new Set<string>()
       const jobsSet = new Set<string>()
+      const isCompleted = d.status === 'COMPLETED'
 
-      for (const dp of d.dispatchParts) {
+      const validParts = d.dispatchParts.filter(
+        (dp) => isCompleted || dp.itemUnit?.currentStatus === 'SHIPPED',
+      )
+
+      for (const dp of validParts) {
         if (dp.itemUnit?.job?.project?.projectName) {
           projectsSet.add(dp.itemUnit.job.project.projectName)
         }
@@ -160,7 +164,7 @@ export class TransitsService {
         startedAt: d.startedAt,
         completedAt: d.completedAt,
         createdBy: d.creator ? { id: d.creator.id, fullName: d.creator.name } : null,
-        _count: { transitProducts: d.dispatchParts.length },
+        _count: { transitProducts: validParts.length },
         projects: Array.from(projectsSet),
         jobs: Array.from(jobsSet),
       }
@@ -176,8 +180,6 @@ export class TransitsService {
         creator: { select: { id: true, name: true, email: true } },
         job: { include: { project: true } },
         dispatchParts: {
-          // A part sent back to Active from the portal is no longer on this dispatch.
-          where: { itemUnit: { currentStatus: 'SHIPPED' } },
           orderBy: { loadedAt: 'desc' },
           include: {
             loader: { select: { id: true, name: true } },
@@ -200,7 +202,12 @@ export class TransitsService {
     }
 
     const transitNumber = this.displayVehicleNumber(dispatch)
-    const transitProducts = dispatch.dispatchParts.map((dp) => ({
+    const isCompleted = dispatch.status === 'COMPLETED'
+    const validParts = dispatch.dispatchParts.filter(
+      (dp) => isCompleted || dp.itemUnit?.currentStatus === 'SHIPPED',
+    )
+
+    const transitProducts = validParts.map((dp) => ({
       id: dp.id,
       scannedAt: dp.loadedAt,
       scannedBy: dp.loader ? { id: dp.loader.id, fullName: dp.loader.name } : null,
@@ -347,12 +354,17 @@ export class TransitsService {
     }
 
     const loaded = await this.prisma.$transaction(async (tx) => {
-      // The part is not SHIPPED, so any surviving dispatch link is stale — typically a
-      // part sent back to Active from the portal. Release it so the rescan can proceed.
-      const released = await tx.dispatchPart.deleteMany({ where: { itemUnitId: unit.id } })
+      // The part is not SHIPPED, so any surviving OPEN dispatch link is stale.
+      // Release it from open dispatches only so completed transit history is preserved.
+      const released = await tx.dispatchPart.deleteMany({
+        where: {
+          itemUnitId: unit.id,
+          dispatch: { status: 'OPEN' },
+        },
+      })
       if (released.count) {
         this.logger.warn(
-          `Released unit ${unit.id} from ${released.count} stale dispatch link(s) before rescan`,
+          `Released unit ${unit.id} from ${released.count} stale open dispatch link(s) before rescan`,
         )
       }
 
@@ -454,14 +466,11 @@ export class TransitsService {
 
   async listGroupedByVehicle() {
     const dispatches = await this.prisma.dispatch.findMany({
-      take: 100,
       orderBy: { startedAt: 'desc' },
       include: {
         creator: { select: { id: true, name: true } },
         job: { include: { project: true } },
         dispatchParts: {
-          // A part sent back to Active from the portal is no longer on this dispatch.
-          where: { itemUnit: { currentStatus: 'SHIPPED' } },
           orderBy: { loadedAt: 'asc' },
           include: {
             itemUnit: {
@@ -485,6 +494,10 @@ export class TransitsService {
       for (const dp of d.dispatchParts) {
         const unit = dp.itemUnit
         if (!unit) continue
+
+        if (d.status === 'OPEN' && unit.currentStatus !== 'SHIPPED') {
+          continue
+        }
 
         const projectName =
           unit.job?.project?.projectName ||
@@ -774,11 +787,21 @@ export class TransitsService {
   }
 
   private async findUnitByQr(qrValue: string) {
-    // Bug 1 fix: removed redundant OR clause — { qrCode: { equals: qrValue } } is
-    // identical to { qrCode: qrValue } and never matches anything the first clause
-    // would not. parseQrPayload already lowercases the value to match stored codes.
+    const cleanValue = qrValue.trim()
+    const lowerValue = cleanValue.toLowerCase()
+    const numericValue = Number(cleanValue)
+    const isNum = Number.isInteger(numericValue) && numericValue > 0
+
     return this.prisma.itemUnit.findFirst({
-      where: { qrCode: qrValue },
+      where: {
+        OR: [
+          { qrCode: { equals: cleanValue, mode: 'insensitive' } },
+          { qrCode: { equals: lowerValue } },
+          ...(isNum ? [{ sourceItemTrackingId: numericValue }] : []),
+          ...(isNum ? [{ sourceQtyGuidId: numericValue }] : []),
+          ...(isNum ? [{ id: numericValue }] : []),
+        ],
+      },
       include: {
         item: true,
         job: { include: { project: true } },
@@ -854,10 +877,25 @@ export class TransitsService {
   private parseQrPayload(raw: string): string {
     const trimmed = raw.trim()
     try {
-      const parsed = JSON.parse(trimmed) as { ItemID?: string; id?: string; qr?: string }
-      return (parsed.ItemID || parsed.id || parsed.qr || trimmed).trim().toLowerCase()
+      const parsed = JSON.parse(trimmed) as {
+        qrCode?: string
+        qr?: string
+        ItemID?: string | number
+        id?: string | number
+        sourceItemTrackingId?: string | number
+        itemTracking?: string | number
+      }
+      const extracted =
+        parsed.qrCode ||
+        parsed.qr ||
+        parsed.sourceItemTrackingId ||
+        parsed.itemTracking ||
+        parsed.ItemID ||
+        parsed.id ||
+        trimmed
+      return String(extracted).trim()
     } catch {
-      return trimmed.toLowerCase()
+      return trimmed
     }
   }
 
