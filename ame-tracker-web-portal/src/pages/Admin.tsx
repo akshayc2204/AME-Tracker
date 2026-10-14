@@ -402,9 +402,6 @@ export default function Admin() {
         </div>
       </div>
 
-      <div className="admin-section-label">Databases</div>
-      <DatabaseSettings />
-
       <div className="admin-section-label">Access</div>
       <div className="admin-people-grid">
         <div className="card admin-panel">
@@ -636,6 +633,8 @@ export default function Admin() {
         </div>
       </div>
 
+      <div className="admin-section-label">Databases</div>
+      <DatabaseSettings />
 
       <div className="admin-section-label">Imports</div>
 
