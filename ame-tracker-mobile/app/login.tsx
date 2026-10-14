@@ -16,27 +16,23 @@ import { Eye, EyeOff } from 'lucide-react-native'
 import { useAuth } from '@/context/AuthContext'
 import { ApiClientError } from '@/services/api'
 
-// Prefilled so operators can sign in with one tap on shared depot devices.
-const DEFAULT_EMAIL = 'operator@ametracker.local'
-const DEFAULT_PASSWORD = 'Password123!'
-
 export default function LoginScreen() {
   const { login } = useAuth()
-  const [email, setEmail] = useState(DEFAULT_EMAIL)
-  const [password, setPassword] = useState(DEFAULT_PASSWORD)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const handleLogin = async () => {
-    if (!email.trim() || !password) {
-      setError('Enter your email and password to sign in.')
+    if (!username.trim() || !password) {
+      setError('Enter your username and password to sign in.')
       return
     }
     setError('')
     setSubmitting(true)
     try {
-      await login(email.trim(), password)
+      await login(username.trim(), password)
     } catch (e) {
       const message =
         e instanceof ApiClientError
@@ -69,14 +65,18 @@ export default function LoginScreen() {
         <Text style={styles.subtitle}>Operator sign-in</Text>
 
         <View style={styles.form}>
-          <Text style={styles.label}>Email</Text>
+          <Text style={styles.label}>Username</Text>
           <TextInput
             style={styles.input}
             autoCapitalize="none"
-            keyboardType="email-address"
-            value={email}
-            onChangeText={setEmail}
-            placeholder="operator@ametracker.local"
+            autoCorrect={false}
+            autoComplete="off"
+            textContentType="none"
+            importantForAutofill="no"
+            keyboardType="default"
+            value={username}
+            onChangeText={setUsername}
+            placeholder="Username"
             placeholderTextColor="#9CA3AF"
           />
           <Text style={styles.label}>Password</Text>
@@ -86,6 +86,9 @@ export default function LoginScreen() {
               secureTextEntry={!showPassword}
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete="off"
+              textContentType="none"
+              importantForAutofill="no"
               value={password}
               onChangeText={setPassword}
               placeholder="Password"

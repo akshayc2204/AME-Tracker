@@ -172,6 +172,7 @@ model ItemUnit {
 
   @@unique([itemId, unitIndex])
   @@index([jobId], map: "idx_item_units_job")
+  @@index([jobId, currentStatus], map: "idx_item_units_job_status")
   @@index([qrCode], map: "idx_item_units_qr")
   @@index([currentStatus], map: "idx_item_units_status")
   @@index([sourceItemTrackingId], map: "idx_item_units_tracking_id")
@@ -197,6 +198,7 @@ model TrackingEvent {
 
   @@index([itemUnitId, createdAt], map: "idx_tracking_unit")
   @@index([qrCode], map: "idx_tracking_qr")
+  @@index([eventType, createdAt], map: "idx_tracking_type_created")
   @@map("tracking_events")
 }
 
@@ -215,6 +217,8 @@ model Dispatch {
   creator       User?          @relation("DispatchCreatedBy", fields: [createdBy], references: [id])
   dispatchParts DispatchPart[]
 
+  @@index([status], map: "idx_dispatches_status")
+  @@index([startedAt], map: "idx_dispatches_started")
   @@map("dispatches")
 }
 

@@ -97,7 +97,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     name: 'System Admin',
     role: 'ADMIN',
     avatar: 'SA',
-    email: 'admin@ame.local',
+    email: '',
   });
   const [isLiveBackend, setIsLiveBackend] = useState(false);
 

@@ -11,7 +11,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { tabBarScrollInset } from '@/constants/layout'
 import { useAuth } from '@/context/AuthContext'
-import { getApiBaseUrl } from '@/services/api'
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth()
@@ -47,8 +46,6 @@ export default function ProfileScreen() {
           <Text style={styles.value}>{user?.email || '—'}</Text>
           <Text style={styles.label}>Role</Text>
           <Text style={styles.value}>{user?.role || '—'}</Text>
-          <Text style={styles.label}>API</Text>
-          <Text style={styles.valueSmall}>{getApiBaseUrl()}</Text>
         </View>
 
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
@@ -82,7 +79,6 @@ const styles = StyleSheet.create({
   },
   label: { marginTop: 10, fontSize: 12, color: '#6B7280', fontWeight: '600' },
   value: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  valueSmall: { fontSize: 12, color: '#374151', fontFamily: 'monospace' },
   logoutBtn: {
     marginHorizontal: 20,
     backgroundColor: '#FEE2E2',

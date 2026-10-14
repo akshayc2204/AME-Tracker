@@ -4,7 +4,7 @@
     "slug": "ame-tracker-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/ame_logo.png",
+    "icon": "./assets/images/ame_icon_improved.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -13,7 +13,7 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/ame_logo.png"
+      "favicon": "./assets/images/ame_icon_improved.png"
     },
     "plugins": [
       "expo-router",
@@ -29,9 +29,9 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/ame_logo.png",
+          "image": "./assets/images/ame_icon_improved.png",
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#ffffff"
         }
       ],
       "expo-status-bar",
@@ -47,8 +47,8 @@
       "package": "com.amescanner.app",
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/ame_logo.png",
-        "backgroundColor": "#000000"
+        "foregroundImage": "./assets/images/ame_icon_improved.png",
+        "backgroundColor": "#ffffff"
       },
       "permissions": [
         "INTERNET",

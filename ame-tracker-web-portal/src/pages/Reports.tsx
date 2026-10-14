@@ -302,21 +302,20 @@ export default function Reports() {
       });
     };
 
+    let reloadTimer: number | undefined;
     const onDispatchComplete = () => {
-      loadData();
-    };
-
-    const onKpi = () => {
-      loadData();
+      if (reloadTimer) window.clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(() => {
+        void loadData();
+      }, 500);
     };
 
     sock.on('dashboard:scan', onScan);
-    sock.on('dashboard:kpi', onKpi);
     sock.on('dashboard:dispatch_complete', onDispatchComplete);
 
     return () => {
+      if (reloadTimer) window.clearTimeout(reloadTimer);
       sock.off('dashboard:scan', onScan);
-      sock.off('dashboard:kpi', onKpi);
       sock.off('dashboard:dispatch_complete', onDispatchComplete);
     };
   }, []);

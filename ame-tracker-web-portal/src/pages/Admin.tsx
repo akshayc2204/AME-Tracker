@@ -222,15 +222,15 @@ export default function Admin() {
     e.preventDefault();
     setOperatorMsg(null);
     const name = opName.trim();
-    const nextEmail = opEmail.trim().toLowerCase();
+    const nextEmail = opEmail.trim();
     const password = opPassword.trim();
 
     if (name.length < 2) {
       setOperatorMsg({ type: 'error', text: 'Operator name must be at least 2 characters.' });
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
-      setOperatorMsg({ type: 'error', text: 'Enter a valid email address.' });
+    if (nextEmail.length < 2) {
+      setOperatorMsg({ type: 'error', text: 'Enter a username.' });
       return;
     }
     if (creatingOperator && password.length < 6) {
@@ -299,9 +299,9 @@ export default function Admin() {
       setProfileMsg({ type: 'error', text: 'Role must be at least 2 characters.' });
       return;
     }
-    const nextEmail = email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
-      setProfileMsg({ type: 'error', text: 'Enter a valid email address.' });
+    const nextEmail = email.trim();
+    if (nextEmail.length < 2) {
+      setProfileMsg({ type: 'error', text: 'Enter a username.' });
       return;
     }
     const password = newPassword.trim();
@@ -437,15 +437,15 @@ export default function Admin() {
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Email</label>
+                  <label className="form-label">Username</label>
                   <input
                     className="form-input"
-                    type="email"
+                    type="text"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
+                    placeholder="Username"
                     disabled={savingProfile}
-                    autoComplete="email"
+                    autoComplete="off"
                   />
                 </div>
                 <div className="form-group admin-form-grid-span">
@@ -483,7 +483,7 @@ export default function Admin() {
                     <div className="admin-profile-value">{fullName || '—'}</div>
                   </div>
                   <div>
-                    <div className="admin-field-label">Email</div>
+                    <div className="admin-field-label">Username</div>
                     <div className="admin-profile-value">{email || '—'}</div>
                   </div>
                   <div>
@@ -534,15 +534,20 @@ export default function Admin() {
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Email</label>
+                  <label className="form-label">Username</label>
                   <input
                     className="form-input"
-                    type="email"
+                    type="text"
+                    name="operator-username"
                     value={opEmail}
                     onChange={(e) => setOpEmail(e.target.value)}
-                    placeholder="operator@example.com"
+                    placeholder="Username"
                     disabled={savingOperator}
-                    autoComplete="email"
+                    autoComplete="off"
+                    data-1p-ignore="true"
+                    data-lpignore="true"
+                    data-protonpass-ignore="true"
+                    data-bwignore="true"
                   />
                 </div>
                 <div className="form-group admin-form-grid-span">

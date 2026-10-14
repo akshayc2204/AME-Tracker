@@ -4,27 +4,18 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Modal,
   StatusBar,
   ActivityIndicator,
   DeviceEventEmitter,
   NativeModules,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   CameraView,
   useCameraPermissions,
   type BarcodeScanningResult,
 } from 'expo-camera'
-import {
-  Keyboard,
-  X,
-  Flashlight,
-  FlashlightOff,
-} from 'lucide-react-native'
+import { X, Flashlight, FlashlightOff } from 'lucide-react-native'
 
 interface ScanCameraModalProps {
   visible: boolean
@@ -39,16 +30,10 @@ export function ScanCameraModal({
   onClose,
   onScan,
 }: ScanCameraModalProps) {
-  const insets = useSafeAreaInsets()
   const [hasPermission, requestPermission] = useCameraPermissions()
   const [flashEnabled, setFlashEnabled] = useState(false)
   const [scanned, setScanned] = useState(false)
-  const [manualEntry, setManualEntry] = useState('')
-  const scanBufferRef = useRef('')
-  const lastKeypressTimeRef = useRef(0)
-  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isTypingInFieldRef = useRef(false)
 
   // The hardware-scanner listeners below are registered once per open, so they
   // must read `busy`/`onScan` through refs or they keep firing stale values and
@@ -160,7 +145,6 @@ export function ScanCameraModal({
     return () => {
       zebra.remove()
       barcode.remove()
-      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
       if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current)
     }
   }, [visible])
@@ -182,10 +166,7 @@ export function ScanCameraModal({
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
-        style={styles.cameraContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <View style={styles.cameraContainer}>
         <StatusBar barStyle="light-content" backgroundColor="#000000" />
         <View style={styles.cameraHeader}>
           <TouchableOpacity style={styles.cameraHeaderButton} onPress={onClose}>
@@ -260,73 +241,7 @@ export function ScanCameraModal({
             </Text>
           </View>
         </View>
-
-        <View
-          style={[
-            styles.manualSection,
-            { paddingBottom: Math.max(insets.bottom, 20) },
-          ]}
-        >
-          <Text style={styles.sectionTitle}>Or Enter Code Manually</Text>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Enter product code or use scanner"
-              value={manualEntry}
-              onChangeText={(text) => {
-                const currentTime = Date.now()
-                const timeDiff = currentTime - lastKeypressTimeRef.current
-                setManualEntry(text)
-
-                if (timeDiff < 45 && text.length > manualEntry.length) {
-                  scanBufferRef.current = text
-                  lastKeypressTimeRef.current = currentTime
-                  if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
-                  scanTimeoutRef.current = setTimeout(() => {
-                    const code = scanBufferRef.current.trim()
-                    if (code.length > 6 && !isTypingInFieldRef.current) {
-                      emitScan(code)
-                      setManualEntry('')
-                      scanBufferRef.current = ''
-                    }
-                  }, 250)
-                } else {
-                  scanBufferRef.current = text
-                  lastKeypressTimeRef.current = currentTime
-                }
-              }}
-              onFocus={() => {
-                isTypingInFieldRef.current = true
-              }}
-              onBlur={() => {
-                isTypingInFieldRef.current = false
-              }}
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="search"
-              onSubmitEditing={() => {
-                if (manualEntry.trim()) {
-                  emitScan(manualEntry)
-                  setManualEntry('')
-                }
-              }}
-            />
-            <TouchableOpacity
-              style={[
-                styles.inputButton,
-                { opacity: manualEntry.trim() && !busy ? 1 : 0.5 },
-              ]}
-              disabled={!manualEntry.trim() || busy}
-              onPress={() => {
-                emitScan(manualEntry)
-                setManualEntry('')
-              }}
-            >
-              <Keyboard size={24} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   )
 }
@@ -411,39 +326,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 32,
     paddingHorizontal: 40,
-  },
-  manualSection: {
-    backgroundColor: '#F9FAFB',
-    paddingTop: 20,
-    paddingHorizontal: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#E5E7EB',
-    overflow: 'hidden',
-  },
-  textInput: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    fontSize: 16,
-    color: '#111827',
-  },
-  inputButton: {
-    backgroundColor: '#078710',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 })

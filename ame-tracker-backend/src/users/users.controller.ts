@@ -9,11 +9,11 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import {
-  IsEmail,
   IsInt,
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   MinLength,
 } from 'class-validator'
@@ -24,7 +24,9 @@ import { Roles } from '../common/decorators/roles.decorator'
 import { ok } from '../common/dto/api-response'
 
 class CreateUserDto {
-  @IsEmail()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
   email!: string
 
   @IsString()
@@ -54,7 +56,9 @@ class UpdateUserDto {
   name?: string
 
   @IsOptional()
-  @IsEmail()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
   email?: string
 
   @IsOptional()

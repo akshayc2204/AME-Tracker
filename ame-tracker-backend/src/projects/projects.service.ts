@@ -6,76 +6,100 @@ export class ProjectsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(search?: string) {
-    const projects = await this.prisma.project.findMany({
-      where: search ? { projectName: { contains: search } } : undefined,
-      include: {
-        _count: { select: { jobs: true } },
-        jobs: {
-          include: {
-            _count: { select: { itemUnits: true } },
-            itemUnits: {
-              select: { currentStatus: true },
+    const [projects, counts] = await Promise.all([
+      this.prisma.project.findMany({
+        where: search ? { projectName: { contains: search } } : undefined,
+        include: {
+          jobs: {
+            select: {
+              id: true,
+              jobName: true,
+              sourceJobId: true,
+              importVersion: true,
+              createdAt: true,
             },
+            orderBy: { id: 'desc' },
           },
-          orderBy: { id: 'desc' },
         },
-      },
-      orderBy: { projectName: 'asc' },
-    })
+        orderBy: { projectName: 'asc' },
+      }),
+      this.statusCountsByJob(),
+    ])
 
-    return projects.map((p) => this.mapProject(p))
+    return projects.map((p) => this.mapProject(p, counts))
   }
 
   async get(id: number) {
-    const project = await this.prisma.project.findUnique({
-      where: { id: Number(id) },
-      include: {
-        _count: { select: { jobs: true } },
-        jobs: {
-          include: {
-            _count: { select: { itemUnits: true } },
-            itemUnits: {
-              select: { currentStatus: true },
+    const projectId = Number(id)
+    const [project, counts] = await Promise.all([
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        include: {
+          jobs: {
+            select: {
+              id: true,
+              jobName: true,
+              sourceJobId: true,
+              importVersion: true,
+              createdAt: true,
             },
+            orderBy: { id: 'desc' },
           },
-          orderBy: { id: 'desc' },
         },
-      },
-    })
+      }),
+      this.statusCountsByJob({ job: { projectId } }),
+    ])
 
     // Bug 12 fix: return 404 instead of null so the HTTP layer doesn't send
     // an empty 200 body that silently confuses the portal's data fetching.
     if (!project) throw new NotFoundException(`Project ${id} not found`)
 
-    return this.mapProject(project)
+    return this.mapProject(project, counts)
   }
 
-  private mapProject(p: {
-    id: number
-    projectName: string
-    projectType: string
-    _count: { jobs: number }
-    jobs: Array<{
+  /** One grouped query instead of loading every unit row just to count statuses. */
+  private async statusCountsByJob(where?: { job: { projectId: number } }) {
+    const groups = await this.prisma.itemUnit.groupBy({
+      by: ['jobId', 'currentStatus'],
+      where,
+      _count: { _all: true },
+    })
+    const map = new Map<number, { total: number; shipped: number }>()
+    for (const row of groups) {
+      const current = map.get(row.jobId) ?? { total: 0, shipped: 0 }
+      current.total += row._count._all
+      if (row.currentStatus === 'SHIPPED') current.shipped += row._count._all
+      map.set(row.jobId, current)
+    }
+    return map
+  }
+
+  private mapProject(
+    p: {
       id: number
-      jobName: string
-      sourceJobId: string
-      importVersion: number
-      createdAt: Date
-      _count: { itemUnits: number }
-      itemUnits: Array<{ currentStatus: string }>
-    }>
-  }) {
+      projectName: string
+      projectType: string
+      jobs: Array<{
+        id: number
+        jobName: string
+        sourceJobId: string
+        importVersion: number
+        createdAt: Date
+      }>
+    },
+    counts: Map<number, { total: number; shipped: number }>,
+  ) {
     let totalParts = 0
     let shippedParts = 0
     for (const j of p.jobs) {
-      totalParts += j._count.itemUnits
-      shippedParts += j.itemUnits.filter((u) => u.currentStatus === 'SHIPPED').length
+      const stats = counts.get(j.id) ?? { total: 0, shipped: 0 }
+      totalParts += stats.total
+      shippedParts += stats.shipped
     }
     const pendingParts = totalParts - shippedParts
 
-    const mapJob = (j: typeof p.jobs[number]) => {
-      const jTotal = j._count.itemUnits
-      const jShipped = j.itemUnits.filter((u) => u.currentStatus === 'SHIPPED').length
+    const mapJob = (j: (typeof p.jobs)[number]) => {
+      const stats = counts.get(j.id) ?? { total: 0, shipped: 0 }
       return {
         id: j.id,
         name: j.jobName,
@@ -83,9 +107,9 @@ export class ProjectsService {
         sourceJobId: j.sourceJobId,
         importVersion: j.importVersion,
         createdAt: j.createdAt,
-        totalParts: jTotal,
-        shippedParts: jShipped,
-        pendingParts: jTotal - jShipped,
+        totalParts: stats.total,
+        shippedParts: stats.shipped,
+        pendingParts: stats.total - stats.shipped,
       }
     }
 
@@ -96,13 +120,13 @@ export class ProjectsService {
       projectType: p.projectType,
       code: p.projectName,
       status: 'ACTIVE',
-      totalJobs: p._count.jobs,
-      activeJobs: p._count.jobs,
+      totalJobs: p.jobs.length,
+      activeJobs: p.jobs.length,
       totalParts,
       shippedParts,
       pendingParts,
       _count: {
-        jobs: p._count.jobs,
+        jobs: p.jobs.length,
         parts: totalParts,
         shipped: shippedParts,
         pending: pendingParts,

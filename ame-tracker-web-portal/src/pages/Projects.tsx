@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderKanban, Briefcase, Package, ChevronRight, ArrowLeft,
@@ -292,14 +292,58 @@ export default function Projects() {
   const [liveProjects, setLiveProjects] = useState<any[]>([]);
   const [liveJobs, setLiveJobs] = useState<any[]>([]);
 
+  const loadInFlight = useRef(false);
+  const projectsSig = useRef('');
+  const jobsSig = useRef('');
+
+  function listSignature(rows: any[]): string {
+    return rows
+      .map((row) =>
+        [
+          row.id,
+          row.totalParts ?? row._count?.parts ?? row._count?.products,
+          row.shippedParts ?? row._count?.shipped,
+          row.pendingParts ?? row._count?.pending,
+          row.importVersion,
+        ].join(':'),
+      )
+      .join('|');
+  }
+
   function loadData() {
-    api.getProjects().then((p) => { if (Array.isArray(p)) setLiveProjects(p); }).catch(() => {});
-    api.getJobs().then((j) => { if (Array.isArray(j)) setLiveJobs(j); }).catch(() => {});
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    Promise.all([
+      api.getProjects().catch(() => null),
+      api.getJobs().catch(() => null),
+    ])
+      .then(([projects, jobs]) => {
+        if (Array.isArray(projects)) {
+          const sig = listSignature(projects);
+          if (sig !== projectsSig.current) {
+            projectsSig.current = sig;
+            setLiveProjects(projects);
+          }
+        }
+        if (Array.isArray(jobs)) {
+          const sig = listSignature(jobs);
+          if (sig !== jobsSig.current) {
+            jobsSig.current = sig;
+            setLiveJobs(jobs);
+          }
+        }
+      })
+      .finally(() => {
+        loadInFlight.current = false;
+      });
   }
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 4000);
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      loadData();
+    }, 20000);
     return () => clearInterval(interval);
   }, []);
 
@@ -359,6 +403,7 @@ export default function Projects() {
   // Level 3 (Parts) state
   const [search, setSearch] = useState('');
   const [projectSearch, setProjectSearch] = useState('');
+  const [jobSearch, setJobSearch] = useState('');
   const [itemFilter, setItemFilter] = useState('');
   const [tableView, setTableView] = useState<TableView>('schedule');
   const [sortKey, setSortKey] = useState<ScheduleSortKey>('ItemID');
@@ -720,19 +765,25 @@ export default function Projects() {
 
   useEffect(() => {
     const sock = getSocket();
+    let timer: number | undefined;
     const onLiveUpdate = () => {
-      loadData();
-      loadJobPartData().then((mapped) => {
-        if (selectedPart) {
-          const updated = mapped.find((p) => p.id === selectedPart.id);
-          if (updated) setSelectedPart(updated);
-        }
-      });
+      if (timer) window.clearTimeout(timer);
+      // Scan and KPI fire together. One refresh covers both.
+      timer = window.setTimeout(() => {
+        loadData();
+        loadJobPartData().then((mapped) => {
+          if (selectedPart) {
+            const updated = mapped.find((p) => p.id === selectedPart.id);
+            if (updated) setSelectedPart(updated);
+          }
+        });
+      }, 400);
     };
     sock.on('dashboard:scan', onLiveUpdate);
     sock.on('dashboard:kpi', onLiveUpdate);
     sock.on('dashboard:dispatch_complete', onLiveUpdate);
     return () => {
+      if (timer) window.clearTimeout(timer);
       sock.off('dashboard:scan', onLiveUpdate);
       sock.off('dashboard:kpi', onLiveUpdate);
       sock.off('dashboard:dispatch_complete', onLiveUpdate);
@@ -800,6 +851,7 @@ export default function Projects() {
       setParams({});
     }
     setSearch('');
+    setJobSearch('');
     setItemFilter('');
     setSortKey('ItemID');
     setTrackingSortKey('ItemTracking');
@@ -1692,6 +1744,13 @@ export default function Projects() {
   // ─── LEVEL 2: PROJECT JOBS VIEW ──────────────────────────────────────────────
   if (selectedProject) {
     const projectJobs = allJobs.filter(j => j.projectId === selectedProject.id);
+    const jobQuery = jobSearch.trim().toLowerCase();
+    const visibleProjectJobs = jobQuery
+      ? projectJobs.filter((j) =>
+          j.jobName.toLowerCase().includes(jobQuery) ||
+          j.sourceJobId.toLowerCase().includes(jobQuery),
+        )
+      : projectJobs;
     const shipped = projectJobs.reduce((s: number, j: any) => s + (j.shippedParts || 0), 0);
     const total = projectJobs.reduce((s: number, j: any) => s + (j.totalParts || 0), 0);
     const pct = total ? Math.round((shipped / total) * 100) : 0;
@@ -1745,12 +1804,32 @@ export default function Projects() {
         </div>
 
         {/* Jobs List */}
-        <div style={{ marginBottom: 14 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 800, margin: '0 0 12px' }}>Project Jobs ({projectJobs.length})</h3>
+        <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>
+            Project Jobs ({jobQuery ? `${visibleProjectJobs.length} of ${projectJobs.length}` : projectJobs.length})
+          </h3>
+          <div className="topbar-search" style={{ flex: 'none' }}>
+            <Search size={13} />
+            <input
+              value={jobSearch}
+              onChange={(e) => setJobSearch(e.target.value)}
+              placeholder="Search jobs…"
+              style={{ width: 220 }}
+            />
+            {jobSearch ? (
+              <button type="button" onClick={() => setJobSearch('')} aria-label="Clear job search">
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {projectJobs.map(job => {
+          {visibleProjectJobs.length === 0 ? (
+            <div className="card" style={{ padding: '28px 22px', textAlign: 'center', color: 'var(--text-muted)' }}>
+              {jobQuery ? `No jobs match “${jobSearch.trim()}”` : 'No jobs in this project.'}
+            </div>
+          ) : visibleProjectJobs.map(job => {
             const jobPct = job.totalParts ? Math.round((job.shippedParts / job.totalParts) * 100) : 0;
             return (
               <div

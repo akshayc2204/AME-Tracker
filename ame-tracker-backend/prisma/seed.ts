@@ -75,39 +75,48 @@ const sampleUnits: DummyUnitSeed[] = [
 
 async function main() {
   const adminPassword = await bcrypt.hash('Admin@123', 10)
-  const devPassword = await bcrypt.hash('Password123!', 10)
+  const operatorPassword = await bcrypt.hash('Operator@123', 10)
+
+  await prisma.user.deleteMany({
+    where: {
+      NOT: {
+        email: {
+          in: ['AME_admin', 'Operator'],
+          mode: 'insensitive',
+        },
+      },
+    },
+  })
 
   const defaultAdmin = await prisma.user.upsert({
-    where: { email: 'admin@ame.local' },
-    update: {},
+    where: { email: 'AME_admin' },
+    update: {
+      name: 'AME_admin',
+      passwordHash: adminPassword,
+      role: 'ADMIN',
+      isActive: 1,
+    },
     create: {
-      email: 'admin@ame.local',
-      name: 'System Admin',
+      email: 'AME_admin',
+      name: 'AME_admin',
       passwordHash: adminPassword,
       role: 'ADMIN',
       isActive: 1,
     },
   })
 
-  const portalAdmin = await prisma.user.upsert({
-    where: { email: 'admin@ametracker.local' },
-    update: {},
-    create: {
-      email: 'admin@ametracker.local',
-      name: 'AME Admin',
-      passwordHash: devPassword,
-      role: 'ADMIN',
+  const defaultOperator = await prisma.user.upsert({
+    where: { email: 'Operator' },
+    update: {
+      name: 'Operator',
+      passwordHash: operatorPassword,
+      role: 'OPERATOR',
       isActive: 1,
     },
-  })
-
-  const operator = await prisma.user.upsert({
-    where: { email: 'operator@ametracker.local' },
-    update: {},
     create: {
-      email: 'operator@ametracker.local',
-      name: 'Operator 05',
-      passwordHash: devPassword,
+      email: 'Operator',
+      name: 'Operator',
+      passwordHash: operatorPassword,
       role: 'OPERATOR',
       isActive: 1,
     },
@@ -190,8 +199,7 @@ async function main() {
   // eslint-disable-next-line no-console
   console.log('Seed completed successfully:', {
     admin: defaultAdmin.email,
-    portalAdmin: portalAdmin.email,
-    operator: operator.email,
+    operator: defaultOperator.email,
     project: project.projectName,
     job: job.sourceJobId,
     itemsCount: sampleUnits.length,
