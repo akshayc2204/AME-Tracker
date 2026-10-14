@@ -45,7 +45,20 @@ export class PrismaService
   }
 
   async onModuleInit() {
-    await this.$connect()
+    try {
+      await this.$connect()
+    } catch (err) {
+      if (process.env.AME_DESKTOP === '1') {
+        const message = err instanceof Error ? err.message : String(err)
+        // Keep the desktop window up so Database settings can be fixed.
+        // eslint-disable-next-line no-console
+        console.error(
+          `PostgreSQL is not ready (${message}). Open Admin → Database settings, fix the connection, then restart.`,
+        )
+        return
+      }
+      throw err
+    }
     try {
       await this.$queryRawUnsafe(`PRAGMA journal_mode = WAL;`)
       await this.$queryRawUnsafe(`PRAGMA foreign_keys = ON;`)

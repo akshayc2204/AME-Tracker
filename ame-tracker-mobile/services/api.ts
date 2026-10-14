@@ -58,7 +58,13 @@ function buildCandidateBaseUrls(): string[] {
     ? normalizeBaseUrl(process.env.EXPO_PUBLIC_API_URL)
     : ''
 
-  // Explicit non-loopback env wins first (production / known LAN).
+  // USB debugging via `adb reverse tcp:3000 tcp:3000` — prefer this on a plugged-in phone.
+  if (Platform.OS === 'android') {
+    push(`http://127.0.0.1:${API_PORT}`)
+    push(`http://localhost:${API_PORT}`)
+  }
+
+  // Explicit LAN/production API (baked into the APK).
   if (
     fromEnv &&
     !fromEnv.includes('127.0.0.1') &&
@@ -78,11 +84,6 @@ function buildCandidateBaseUrls(): string[] {
   if (Platform.OS === 'android' && __DEV__) {
     push(`http://127.0.0.1:${metroPort}`)
     push(`http://localhost:${metroPort}`)
-  }
-
-  // USB debugging via `adb reverse tcp:3000 tcp:3000`
-  if (Platform.OS === 'android') {
-    push(`http://127.0.0.1:${API_PORT}`)
   }
 
   if (lanHost) {

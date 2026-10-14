@@ -3,7 +3,15 @@
  * Connects the web portal directly to the NestJS backend on http://localhost:3000/api
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+function resolveApiBaseUrl(): string {
+  const configured = import.meta.env.VITE_API_URL as string | undefined;
+  if (configured) return configured.replace(/\/$/, '');
+  // Desktop builds are served by the API, so /api is the same origin.
+  if (import.meta.env.DEV) return 'http://localhost:3000/api';
+  return '/api';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export function getAuthToken(): string | null {
   return localStorage.getItem('ame_token');
@@ -1114,6 +1122,84 @@ export const api = {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   },
+
+  desktop: {
+    async getConfig() {
+      return (await request<{
+        desktopMode: boolean;
+        configPath: string;
+        port: number;
+        lanApiUrls: string[];
+        postgres: {
+          host: string;
+          port: number;
+          database: string;
+          user: string;
+          passwordSet: boolean;
+        };
+        fabshop: {
+          server: string;
+          port: number;
+          database: string;
+          user: string;
+          encrypt: boolean;
+          passwordSet: boolean;
+        };
+      }>('/desktop/config')).data;
+    },
+
+    async saveConfig(body: DesktopSettingsBody) {
+      return (await request<{
+        desktopMode: boolean;
+        configPath: string;
+        restartRequired: boolean;
+        message: string;
+        postgres: { passwordSet: boolean };
+        fabshop: { passwordSet: boolean };
+      }>('/desktop/config', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })).data;
+    },
+
+    async testPostgres(postgres: DesktopSettingsBody['postgres']) {
+      return (await request<{ ok: boolean; message: string }>('/desktop/test-postgres', {
+        method: 'POST',
+        body: JSON.stringify(postgres),
+      })).data;
+    },
+
+    async testFabshop(fabshop: DesktopSettingsBody['fabshop']) {
+      return (await request<{ ok: boolean; message: string }>('/desktop/test-fabshop', {
+        method: 'POST',
+        body: JSON.stringify(fabshop),
+      })).data;
+    },
+
+    async restart() {
+      return (await request<{ restarting: boolean; message: string }>('/desktop/restart', {
+        method: 'POST',
+      })).data;
+    },
+  },
 };
+
+export interface DesktopSettingsBody {
+  postgres: {
+    host: string;
+    port: number;
+    database: string;
+    user: string;
+    password?: string;
+  };
+  fabshop: {
+    server: string;
+    port: number;
+    database: string;
+    user: string;
+    password?: string;
+    encrypt: boolean;
+  };
+}
 
 

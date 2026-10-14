@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 
 import { api } from '../services/api';
+import DatabaseSettings from './DatabaseSettings';
 import { useApp } from '../store/AppContext';
 import {
   pickFolderFromDisk,
@@ -377,7 +378,7 @@ export default function Admin() {
       <div className="page-header admin-hero">
         <div>
           <h2>Admin</h2>
-          <p>Manage your account, mobile operators, and job import folder.</p>
+          <p>Manage your account, mobile operators, job import folder, and database connections.</p>
         </div>
         <div className="admin-hero-meta">
           <div className="admin-meta-chip">
@@ -400,6 +401,9 @@ export default function Admin() {
           </div>
         </div>
       </div>
+
+      <div className="admin-section-label">Databases</div>
+      <DatabaseSettings />
 
       <div className="admin-section-label">Access</div>
       <div className="admin-people-grid">

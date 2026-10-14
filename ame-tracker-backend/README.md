@@ -5,7 +5,7 @@ NestJS API for AME Tracker: auth, Trimble FabShop sync, file import, products, d
 ## Stack
 
 - NestJS + TypeScript
-- Prisma (SQLite by default; PostgreSQL-ready)
+- Prisma (local PostgreSQL)
 - JWT roles: `ADMIN`, `OPERATOR`
 - Optional read-only Trimble FabShop (SQL Server via `mssql`)
 - Socket.IO dashboard events

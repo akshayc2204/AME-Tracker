@@ -5,9 +5,14 @@
  */
 import { io, Socket } from 'socket.io-client'
 
-const SOCKET_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : 'http://localhost:3000'
+function resolveSocketUrl(): string {
+  const configured = import.meta.env.VITE_API_URL as string | undefined;
+  if (configured) return configured.replace(/\/api\/?$/, '');
+  if (import.meta.env.DEV) return 'http://localhost:3000';
+  return window.location.origin;
+}
+
+const SOCKET_URL = resolveSocketUrl();
 
 let socket: Socket | null = null
 

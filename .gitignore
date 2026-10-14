@@ -5,6 +5,8 @@ node_modules/
 # Builds & caches
 dist/
 build/
+ame-tracker-desktop/release/
+ame-tracker-desktop/staging/
 coverage/
 .turbo/
 .expo/

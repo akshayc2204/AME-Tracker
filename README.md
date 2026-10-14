@@ -4,7 +4,7 @@ End-to-end fabrication tracking for ductwork: import or sync jobs from Trimble F
 
 ```text
 AME-Tracker/
-├── ame-tracker-backend/       NestJS API + Prisma (SQLite or PostgreSQL)
+├── ame-tracker-backend/       NestJS API + Prisma (local PostgreSQL)
 ├── AME-tracker-web-portal/    React + Vite admin portal
 ├── ame-tracker-mobile/        Expo React Native operator app
 ├── demo/                      Sample VJOB + Fab Shop files for manual import
@@ -67,13 +67,13 @@ AME-Tracker/
                   ▼           ▼
          ┌────────────┐  ┌─────────────────────┐
          │ Prisma DB  │  │ Trimble FabShop     │
-         │ SQLite or  │  │ SQL Server :1433    │
-         │ PostgreSQL │  │ Projects→Jobs→Items │
+         │ PostgreSQL │  │ SQL Server :1433    │
+         │ :5432      │  │ Projects→Jobs→Items │
          └────────────┘  └─────────────────────┘
 ```
 
-**Default local DB:** SQLite (`DATABASE_URL=file:./dev.db`).  
-**Optional live source:** Trimble FabShop via `mssql` (read-only).
+**Local DB:** PostgreSQL (`DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ame_tracker?schema=public`).  
+**Optional live source:** Trimble FabShop via `mssql` (read-only). SQL Server is not required for local testing.
 
 ---
 
@@ -246,7 +246,7 @@ npm run start
 
 | Variable | Purpose |
 |----------|---------|
-| `DATABASE_URL` | Prisma DB (`file:./dev.db` or Postgres URL) |
+| `DATABASE_URL` | Local PostgreSQL URL |
 | `JWT_SECRET` | Access/refresh signing |
 | `PORT` | Default `3000` |
 | `CORS_ORIGINS` | Portal + Expo origins |
