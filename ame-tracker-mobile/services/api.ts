@@ -11,6 +11,7 @@ import {
 
 const API_PORT = 3000
 const CACHE_KEY = 'ame.api.baseUrl'
+const CUSTOM_URL_KEY = 'ame.api.customBaseUrl'
 const REQUEST_TIMEOUT_MS = 12_000
 const PROBE_TIMEOUT_MS = 2_500
 
@@ -19,6 +20,85 @@ let resolvePromise: Promise<string> | null = null
 
 function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/$/, '')
+}
+
+export function formatServerUrl(input: string): string {
+  let trimmed = input.trim().replace(/\/+$/, '')
+  if (!trimmed) return ''
+  if (!/^https?:\/\//i.test(trimmed)) {
+    trimmed = `http://${trimmed}`
+  }
+  const afterProto = trimmed.replace(/^https?:\/\//i, '')
+  if (!afterProto.includes(':')) {
+    trimmed = `${trimmed}:${API_PORT}`
+  }
+  return trimmed
+}
+
+export async function getCustomServerUrl(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(CUSTOM_URL_KEY)
+  } catch {
+    return null
+  }
+}
+
+export async function setCustomServerUrl(url: string | null): Promise<void> {
+  if (!url || !url.trim()) {
+    try {
+      await AsyncStorage.removeItem(CUSTOM_URL_KEY)
+      await AsyncStorage.removeItem(CACHE_KEY)
+    } catch {
+      // ignore
+    }
+    activeBaseUrl = null
+    resolvePromise = null
+    await ensureApiBaseUrl(true)
+    return
+  }
+  const formatted = formatServerUrl(url)
+  try {
+    await AsyncStorage.setItem(CUSTOM_URL_KEY, formatted)
+    await AsyncStorage.setItem(CACHE_KEY, formatted)
+  } catch {
+    // ignore
+  }
+  activeBaseUrl = formatted
+  resolvePromise = null
+}
+
+export async function testServerConnection(url: string): Promise<{
+  ok: boolean
+  message: string
+}> {
+  const formatted = formatServerUrl(url)
+  if (!formatted) {
+    return { ok: false, message: 'Please enter a server IP or address.' }
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 4000)
+  try {
+    const res = await fetch(`${formatted}/api/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      return { ok: false, message: `Server replied with HTTP status ${res.status}` }
+    }
+    const body = (await res.json()) as { success?: boolean; data?: { service?: string } }
+    if (body?.success === true && body?.data?.service === 'ame-tracker-api') {
+      return { ok: true, message: 'Connected successfully to AME Tracker server!' }
+    }
+    return { ok: false, message: 'Connected, but the endpoint is not an AME Tracker server.' }
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return { ok: false, message: 'Connection timed out. Check IP and Wi-Fi network.' }
+    }
+    return { ok: false, message: 'Could not connect. Ensure phone is on the same Wi-Fi and firewall port 3000 is open.' }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function metroDevHost(): string {
@@ -152,12 +232,20 @@ function firstSuccessfulProbe(urls: string[]): Promise<string | null> {
 }
 
 async function discoverWorkingBaseUrl(prefer?: string | null): Promise<string> {
+  let custom: string | null = null
+  try {
+    custom = await AsyncStorage.getItem(CUSTOM_URL_KEY)
+  } catch {
+    // ignore
+  }
+
   // Never prefer a direct :3000 cache when Metro proxy candidates exist —
   // phone often cannot open Windows port 3000 even though :8081 works.
   const preferred =
     prefer && /:(8081|19000|19001)\b/.test(prefer) ? prefer : null
 
   const ordered = [
+    ...(custom ? [normalizeBaseUrl(custom)] : []),
     ...(preferred ? [normalizeBaseUrl(preferred)] : []),
     ...buildCandidateBaseUrls(),
   ].filter((url, index, all) => url && all.indexOf(url) === index)
@@ -186,11 +274,25 @@ export async function ensureApiBaseUrl(force = false): Promise<string> {
 
   if (!resolvePromise || force) {
     resolvePromise = (async () => {
+      let custom: string | null = null
       let cached: string | null = null
       try {
+        custom = await AsyncStorage.getItem(CUSTOM_URL_KEY)
         cached = await AsyncStorage.getItem(CACHE_KEY)
       } catch {
-        cached = null
+        // ignore
+      }
+
+      // If user configured a custom server URL, probe it first
+      if (custom) {
+        const ok = await probeBaseUrl(custom)
+        if (ok) {
+          activeBaseUrl = custom
+          if (__DEV__) {
+            console.log('[api] using configured custom API_BASE_URL =', custom)
+          }
+          return custom
+        }
       }
 
       const winner = await discoverWorkingBaseUrl(force ? null : cached)

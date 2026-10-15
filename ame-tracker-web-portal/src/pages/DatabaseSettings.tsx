@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Database, Pencil, RefreshCw, Save, Server, X } from 'lucide-react';
+import { Database, Pencil, RefreshCw, Save, Server, Smartphone, X } from 'lucide-react';
 import { api, type DesktopSettingsBody } from '../services/api';
 
 type Status = { type: 'error' | 'success'; text: string } | null;
@@ -16,6 +16,8 @@ export default function DatabaseSettings() {
   const [fabshopPasswordSet, setFabshopPasswordSet] = useState(false);
   const [configPath, setConfigPath] = useState('');
   const [desktopMode, setDesktopMode] = useState(false);
+  const [lanApiUrls, setLanApiUrls] = useState<string[]>([]);
+  const [apiPort, setApiPort] = useState(3000);
   const [restartRequired, setRestartRequired] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -39,6 +41,8 @@ export default function DatabaseSettings() {
         if (cancelled || !config) return;
         setDesktopMode(config.desktopMode);
         setConfigPath(config.configPath);
+        setLanApiUrls(config.lanApiUrls || []);
+        setApiPort(config.port || 3000);
         setPostgresPasswordSet(config.postgres.passwordSet);
         setFabshopPasswordSet(config.fabshop.passwordSet);
         const pg: PostgresForm = { host: config.postgres.host, port: config.postgres.port, database: config.postgres.database, user: config.postgres.user, password: '' };
@@ -285,6 +289,40 @@ export default function DatabaseSettings() {
         )}
       </div>
 
+      {/* ── LAN / Mobile API URL card ── */}
+      <div className="card admin-panel" style={{ gridColumn: '1 / -1' }}>
+        <div className="card-header">
+          <div className="admin-panel-heading">
+            <div className="admin-icon-badge is-blue">
+              <Smartphone size={16} />
+            </div>
+            <div>
+              <div className="card-title">Mobile App API Address</div>
+              <div className="card-subtitle">Use this URL in the mobile app to connect to this server.</div>
+            </div>
+          </div>
+        </div>
+        <div className="card-body admin-stack">
+          <div className="form-group">
+            <label className="form-label">API address for the mobile app</label>
+            <input
+              className="form-input"
+              readOnly
+              value={lanApiUrls[0] || `http://127.0.0.1:${apiPort}`}
+              onFocus={(e) => e.target.select()}
+            />
+            {lanApiUrls.length > 1 && (
+              <div className="form-hint">
+                Also reachable at: {lanApiUrls.slice(1).join(', ')}
+              </div>
+            )}
+            <div className="form-hint">
+              Enter this address in the mobile app settings. The phone must be on the same Wi-Fi network as this PC.
+            </div>
+          </div>
+        </div>
+      </div>
+
       {!desktopMode && (
         <div className="form-hint" style={{ gridColumn: '1 / -1' }}>
           Open AME Tracker as the desktop app to apply these settings. Config: {configPath}
@@ -292,6 +330,7 @@ export default function DatabaseSettings() {
       )}
     </div>
   );
+
 }
 
 function Field({ label, value, onChange, type = 'text' }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {
