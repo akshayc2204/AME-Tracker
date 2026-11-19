@@ -15,6 +15,7 @@ import { RolesGuard } from '../common/guards/roles.guard'
 import { Roles } from '../common/decorators/roles.decorator'
 import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
 import { ok } from '../common/dto/api-response'
+import { getActiveDesktopConfig } from '../desktop/desktop-config'
 
 @Controller('api/fabshop')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -33,7 +34,7 @@ export class FabshopDbController {
     const connected = await this.fabshopDb.checkConnected()
     return ok({
       connected,
-      database: 'TrimbleFabShop (US Metric)',
+      database: getActiveDesktopConfig()?.fabshop.database || 'TrimbleFabShop (US Metric)',
       access: 'read-only',
       activeSyncs: this.fabshopSync.activeSyncs(),
     })

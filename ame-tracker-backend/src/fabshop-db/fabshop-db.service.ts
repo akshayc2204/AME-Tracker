@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import * as sql from 'mssql'
+import { getActiveDesktopConfig, toMssqlConfig } from '../desktop/desktop-config'
 import { PrismaService } from '../prisma/prisma.service'
 
 export interface FabshopSyncProject {
@@ -215,6 +216,8 @@ export class FabshopDbService implements OnModuleInit, OnModuleDestroy {
   }
 
   private serverLabel(): string {
+    const desktop = getActiveDesktopConfig()
+    if (desktop) return `${desktop.fabshop.server}:${desktop.fabshop.port}`
     const server = this.config.get<string>('FABSHOP_DB_SERVER', '127.0.0.1')
     const port = this.config.get<string | number>('FABSHOP_DB_PORT', 1433)
     return `${server}:${port}`
@@ -229,28 +232,29 @@ export class FabshopDbService implements OnModuleInit, OnModuleDestroy {
   }
 
   private poolConfig(): sql.config {
-    return {
-      server: this.config.get<string>('FABSHOP_DB_SERVER', '127.0.0.1'),
-      port: Number(this.config.get<number>('FABSHOP_DB_PORT', 1433)),
-      database: this.config.get<string>('FABSHOP_DB_DATABASE', 'TrimbleFabShop (US Metric)'),
-      user: this.config.get<string>('FABSHOP_DB_USER', 'ame_readonly'),
-      password: this.config.get<string>('FABSHOP_DB_PASSWORD', 'AmeTracker@ReadOnly1!'),
-      options: {
-        encrypt: this.config.get<string>('FABSHOP_DB_ENCRYPT', 'false') === 'true',
-        trustServerCertificate: true,
-        enableArithAbort: true,
-        // Do not send ATTENTION/cancel — it leaves tedious connections unusable.
-        cancelTimeout: 5_000,
-      },
-      pool: {
-        max: 4,
-        min: 1,
-        idleTimeoutMillis: 60_000,
-      },
-      connectionTimeout: FabshopDbService.CONNECT_TIMEOUT_MS,
-      // 0 = do not ATTENTION-cancel hung queries (that poisons this SQL Server).
-      requestTimeout: 0,
+    const desktop = getActiveDesktopConfig()
+    if (desktop) {
+      return toMssqlConfig(desktop.fabshop, {
+        connectionTimeout: FabshopDbService.CONNECT_TIMEOUT_MS,
+        requestTimeout: 0,
+      })
     }
+    return toMssqlConfig(
+      {
+        server: this.config.get<string>('FABSHOP_DB_SERVER', '127.0.0.1') || '127.0.0.1',
+        port: Number(this.config.get('FABSHOP_DB_PORT') || 1433),
+        database:
+          this.config.get<string>('FABSHOP_DB_DATABASE', 'TrimbleFabShop (US Metric)') ||
+          'TrimbleFabShop (US Metric)',
+        user: this.config.get<string>('FABSHOP_DB_USER', 'ame_readonly') || 'ame_readonly',
+        password: this.config.get<string>('FABSHOP_DB_PASSWORD', '') || '',
+        encrypt: this.config.get<string>('FABSHOP_DB_ENCRYPT', 'false') === 'true',
+      },
+      {
+        connectionTimeout: FabshopDbService.CONNECT_TIMEOUT_MS,
+        requestTimeout: 0,
+      },
+    )
   }
 
   private async connect() {

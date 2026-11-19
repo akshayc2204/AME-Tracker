@@ -1,6 +1,6 @@
 // AME Tracker — Prisma Schema
 // Hierarchy: Project → Job → Item → ItemUnit
-// Supports SQLite (local/dev) and PostgreSQL (production) via provider switch.
+// Local and production database: PostgreSQL.
 
 generator client {
   provider = "prisma-client-js"

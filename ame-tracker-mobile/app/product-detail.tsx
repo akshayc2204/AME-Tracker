@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react'
 import {
   View,
   Text,
@@ -6,323 +6,263 @@ import {
   ScrollView,
   TouchableOpacity,
   StatusBar,
-} from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
+  ActivityIndicator,
+  Share,
+} from 'react-native'
+import { useLocalSearchParams, router } from 'expo-router'
 import {
   ArrowLeft,
   Package,
-  Calendar,
   Building,
   Ruler,
   Hash,
   MapPin,
-  User,
   FileText,
-  Share,
-} from 'lucide-react-native';
-import { getProductById } from '../utils/productData'; // Import from your productData file
+  Share as ShareIcon,
+  Truck,
+} from 'lucide-react-native'
+import { resolveProduct } from '@/services/products'
+import { ApiClientError } from '@/services/api'
+import type { ProductUnit } from '@/types/product'
 
-export default function ProductDetail() {
-  const params = useLocalSearchParams();
-  const code = params.code as string;
-  const product = getProductById(code);
+function formatWhen(iso?: string | null) {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return iso
+  }
+}
 
-  console.log('Looking for product code:', code);
-  console.log('Found product:', product);
+function statusStyle(status: string) {
+  const s = status.toUpperCase()
+  if (s === 'SHIPPED' || s === 'LOADED') {
+    return { bg: '#D1FAE5', text: '#065F46' }
+  }
+  if (s === 'PENDING') {
+    return { bg: '#FEF3C7', text: '#92400E' }
+  }
+  return { bg: '#E5E7EB', text: '#374151' }
+}
 
-  const handleBack = () => {
-    router.back();
-  };
-
-  const handleShare = () => {
-    // Implement sharing functionality
-    console.log('Share product:', product?.id || code);
-  };
-
-  const DetailRow = ({ icon: Icon, label, value, fullWidth = false }: {
-    icon: any;
-    label: string;
-    value: string;
-    fullWidth?: boolean;
-  }) => (
-    <View style={[styles.detailRow, fullWidth && styles.detailRowFull]}>
+function DetailRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ size?: number; color?: string }>
+  label: string
+  value: string
+}) {
+  return (
+    <View style={styles.detailRow}>
       <View style={styles.detailIcon}>
         <Icon size={16} color="#1E40AF" />
       </View>
       <View style={styles.detailContent}>
         <Text style={styles.detailLabel}>{label}</Text>
-        <Text style={styles.detailValue}>{value}</Text>
+        <Text style={styles.detailValue}>{value || '—'}</Text>
       </View>
     </View>
-  );
+  )
+}
 
-  // If product not found, show error state
-  if (!product) {
+export default function ProductDetail() {
+  const params = useLocalSearchParams<{ id?: string; code?: string }>()
+  const [product, setProduct] = useState<ProductUnit | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
+  const lookupLabel = params.id || params.code || ''
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setNotFound(false)
+    try {
+      const unit = await resolveProduct({
+        id: typeof params.id === 'string' ? params.id : undefined,
+        code: typeof params.code === 'string' ? params.code : undefined,
+      })
+      setProduct(unit)
+    } catch (e) {
+      setProduct(null)
+      if (e instanceof ApiClientError && (e.status === 404 || e.code === 'PRODUCT_NOT_FOUND')) {
+        setNotFound(true)
+      } else {
+        setNotFound(true)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [params.id, params.code])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const handleBack = () => {
+    router.back()
+  }
+
+  const handleShare = async () => {
+    if (!product) return
+    const lines = [
+      `Piece #${product.pieceNumber}`,
+      product.fitting,
+      `Job: ${product.job?.code} — ${product.job?.name}`,
+      `Project: ${product.job?.project?.name}`,
+      `Status: ${product.currentStatus}`,
+      product.qrCodeStr ? `QR: ${product.qrCodeStr}` : '',
+      product.itemTracking ? `ItemTracking: ${product.itemTracking}` : '',
+    ].filter(Boolean)
+    try {
+      await Share.share({ message: lines.join('\n') })
+    } catch {
+      // user dismissed
+    }
+  }
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <StatusBar barStyle="light-content" backgroundColor="#1E40AF" />
+        <ActivityIndicator size="large" color="#1E40AF" />
+        <Text style={styles.loadingText}>Loading part…</Text>
+      </View>
+    )
+  }
+
+  if (notFound || !product) {
     return (
       <View style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="#1E40AF" />
-        
-        {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={handleBack}>
             <ArrowLeft size={24} color="#FFFFFF" />
           </TouchableOpacity>
-          
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle}>Part Details</Text>
-            <Text style={styles.headerSubtitle}>{code}</Text>
+            <Text style={styles.headerSubtitle}>{lookupLabel}</Text>
           </View>
-          
-          <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
-            <Share size={20} color="#FFFFFF" />
-          </TouchableOpacity>
         </View>
-
         <View style={styles.content}>
           <View style={styles.productCard}>
-            <View style={styles.productHeader}>
-              <View style={styles.productIcon}>
-                <Package size={32} color="#EF4444" />
-              </View>
-              <View style={styles.productInfo}>
-                <Text style={styles.productName}>Product Not Found</Text>
-                <Text style={styles.productType}>Unknown Product</Text>
-                <View style={[styles.quantityBadge, { backgroundColor: '#FEF2F2' }]}>
-                  <Text style={[styles.quantityText, { color: '#EF4444' }]}>Code: {code}</Text>
-                </View>
-              </View>
-            </View>
-            
-            <View style={styles.errorMessage}>
-              <Text style={styles.errorText}>
-                The product with code "{code}" was not found in our database. 
-                Please verify the code and try again.
-              </Text>
-            </View>
+            <Text style={styles.productName}>Part not found</Text>
+            <Text style={styles.errorText}>
+              No unit matched this id or code in the live database. Search on the Search tab or
+              scan the QR from a dispatch.
+            </Text>
           </View>
         </View>
       </View>
-    );
+    )
   }
+
+  const status = product.currentStatus || product.status || 'PENDING'
+  const badge = statusStyle(status)
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1E40AF" />
-      
-      {/* Header */}
+
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <ArrowLeft size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        
         <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>Product Details</Text>
-          <Text style={styles.headerSubtitle}>{product.id}</Text>
+          <Text style={styles.headerTitle}>Part Details</Text>
+          <Text style={styles.headerSubtitle}>Unit #{product.id}</Text>
         </View>
-        
-        <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
-          <Share size={20} color="#FFFFFF" />
+        <TouchableOpacity style={styles.shareButton} onPress={() => void handleShare()}>
+          <ShareIcon size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Product Card */}
         <View style={styles.productCard}>
           <View style={styles.productHeader}>
             <View style={styles.productIcon}>
               <Package size={32} color="#1E40AF" />
             </View>
             <View style={styles.productInfo}>
-              <Text style={styles.productName}>{product.name}</Text>
-              <Text style={styles.productType}>{product.type}</Text>
-              <View style={styles.quantityBadge}>
-                <Text style={styles.quantityText}>Quantity: {product.quantity}</Text>
+              <Text style={styles.productName}>{product.fitting}</Text>
+              <Text style={styles.productType}>Piece #{product.pieceNumber} · Unit {product.unitIndex}</Text>
+              <View style={[styles.quantityBadge, { backgroundColor: badge.bg }]}>
+                <Text style={[styles.quantityText, { color: badge.text }]}>{status}</Text>
               </View>
             </View>
           </View>
+          {product.description ? (
+            <Text style={styles.descriptionText}>{product.description}</Text>
+          ) : null}
         </View>
 
-        {/* Company Information */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Company Information</Text>
+          <Text style={styles.sectionTitle}>Job & project</Text>
           <View style={styles.card}>
-            <DetailRow
-              icon={Building}
-              label="Company"
-              value={product.company || 'N/A'}
-              fullWidth
-            />
-            <DetailRow
-              icon={MapPin}
-              label="Project"
-              value={product.project || 'N/A'}
-              fullWidth
-            />
-            <DetailRow
-              icon={FileText}
-              label="Job"
-              value={product.job || 'N/A'}
-              fullWidth
-            />
+            <DetailRow icon={Building} label="Project" value={product.job?.project?.name || '—'} />
+            <DetailRow icon={FileText} label="Job" value={`${product.job?.code || ''} — ${product.job?.name || ''}`} />
+            <DetailRow icon={Hash} label="Item ID" value={product.itemId} />
+            <DetailRow icon={Hash} label="ItemTracking" value={product.itemTracking || 'Not assigned'} />
           </View>
         </View>
 
-        {/* Product Specifications */}
-        {product.specifications && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Specifications</Text>
-            <View style={styles.card}>
-              {product.specifications.material && (
-                <DetailRow
-                  icon={Hash}
-                  label="Material"
-                  value={product.specifications.material}
-                  fullWidth
-                />
-              )}
-              {product.specifications.dimensions && (
-                <DetailRow
-                  icon={Ruler}
-                  label="Dimensions"
-                  value={product.specifications.dimensions}
-                  fullWidth
-                />
-              )}
-              {product.specifications.pressure && (
-                <DetailRow
-                  icon={FileText}
-                  label="Pressure"
-                  value={product.specifications.pressure}
-                  fullWidth
-                />
-              )}
-              {product.specifications.radius && (
-                <DetailRow
-                  icon={FileText}
-                  label="Configuration"
-                  value={product.specifications.radius}
-                  fullWidth
-                />
-              )}
-              {product.specifications.size && (
-                <DetailRow
-                  icon={Ruler}
-                  label="Size"
-                  value={product.specifications.size}
-                  fullWidth
-                />
-              )}
-            </View>
-          </View>
-        )}
-
-        Measurements
-        {product.measurements && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Measurements</Text>
-            <View style={styles.card}>
-              <View style={styles.measurementGrid}>
-                {product.measurements.length && (
-                  <View style={styles.measurementItem}>
-                    <Text style={styles.measurementLabel}>Length</Text>
-                    <Text style={styles.measurementValue}>{product.measurements.length}</Text>
-                  </View>
-                )}
-                {product.measurements.width && (
-                  <View style={styles.measurementItem}>
-                    <Text style={styles.measurementLabel}>Width</Text>
-                    <Text style={styles.measurementValue}>{product.measurements.width}</Text>
-                  </View>
-                )}
-                {product.measurements.height && (
-                  <View style={styles.measurementItem}>
-                    <Text style={styles.measurementLabel}>Height</Text>
-                    <Text style={styles.measurementValue}>{product.measurements.height}</Text>
-                  </View>
-                )}
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Additional Details */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Additional Details</Text>
+          <Text style={styles.sectionTitle}>Identification</Text>
           <View style={styles.card}>
-            <DetailRow
-              icon={Calendar}
-              label="Date"
-              value={product.date || 'N/A'}
-              fullWidth
-            />
-            <DetailRow
-              icon={Hash}
-              label="DL Number"
-              value={product.dlNumber || 'N/A'}
-              fullWidth
-            />
-            
-            {product.soNumber && (
-              <DetailRow
-                icon={FileText}
-                label="SO Number"
-                value={product.soNumber}
-                fullWidth
-              />
-            )}
-            
-            {product.location && (
-              <DetailRow
-                icon={MapPin}
-                label="Location"
-                value={product.location}
-                fullWidth
-              />
-            )}
-            
-            {product.temperature && (
-              <DetailRow
-                icon={FileText}
-                label="Temperature"
-                value={product.temperature}
-                fullWidth
-              />
-            )}
-
-            {product.weight && (
-              <DetailRow
-                icon={Hash}
-                label="Weight"
-                value={product.weight}
-                fullWidth
-              />
-            )}
+            <DetailRow icon={Hash} label="QR code" value={product.qrCodeStr} />
+            <DetailRow icon={MapPin} label="Storage" value={product.storage || product.location} />
           </View>
         </View>
 
-        {/* Actions */}
-        <View style={styles.actionsSection}>
-          <TouchableOpacity style={styles.actionButton}>
-            <FileText size={20} color="#1E40AF" />
-            <Text style={styles.actionButtonText}>Generate Report</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.actionButton}>
-            <Share size={20} color="#1E40AF" />
-            <Text style={styles.actionButtonText}>Export Data</Text>
-          </TouchableOpacity>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Specifications</Text>
+          <View style={styles.card}>
+            {product.metal ? <DetailRow icon={Hash} label="Metal" value={product.metal} /> : null}
+            {product.gauge != null ? (
+              <DetailRow icon={Ruler} label="Gauge" value={String(product.gauge)} />
+            ) : null}
+            {product.metricWeight ? (
+              <DetailRow icon={Hash} label="Weight (kg)" value={String(product.metricWeight)} />
+            ) : null}
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Shipping</Text>
+          <View style={styles.card}>
+            <DetailRow icon={Truck} label="Last event" value={product.trackEvent || '—'} />
+            <DetailRow icon={FileText} label="Shipped at" value={formatWhen(product.shippedAt)} />
+            {product.lastEvent?.vehicleNumber ? (
+              <DetailRow icon={Truck} label="Vehicle" value={product.lastEvent.vehicleNumber} />
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F9FAFB',
+  },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    color: '#6B7280',
+    fontSize: 15,
   },
   header: {
     backgroundColor: '#1E40AF',
@@ -405,8 +345,13 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     marginBottom: 8,
   },
+  descriptionText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#4B5563',
+    lineHeight: 20,
+  },
   quantityBadge: {
-    backgroundColor: '#EBF4FF',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
@@ -415,19 +360,11 @@ const styles = StyleSheet.create({
   quantityText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#1E40AF',
-  },
-  errorMessage: {
-    marginTop: 16,
-    padding: 16,
-    backgroundColor: '#FEF2F2',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FECACA',
   },
   errorText: {
+    marginTop: 12,
     fontSize: 14,
-    color: '#DC2626',
+    color: '#6B7280',
     lineHeight: 20,
   },
   section: {
@@ -451,16 +388,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: 16,
-    flexWrap: 'wrap',
-  },
-  detailRowFull: {
-    flex: 1,
-    flexWrap: 'wrap',
-  },
-  detailGrid: {
-    flexDirection: 'row',
-    gap: 16,
-    marginBottom: 16,
   },
   detailIcon: {
     width: 32,
@@ -473,7 +400,6 @@ const styles = StyleSheet.create({
   },
   detailContent: {
     flex: 1,
-    flexWrap: 'wrap',
   },
   detailLabel: {
     fontSize: 13,
@@ -486,54 +412,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#111827',
   },
-  measurementGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  measurementItem: {
-    flex: 1,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-    padding: 12,
-    alignItems: 'center',
-  },
-  measurementLabel: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#6B7280',
-    marginBottom: 4,
-  },
-  measurementValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  actionsSection: {
-    flexDirection: 'row',
-    gap: 12,
-    marginHorizontal: 20,
-    marginTop: 24,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#1E40AF',
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    gap: 8,
-  },
-  actionButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1E40AF',
-  },
   bottomSpacer: {
     height: 40,
   },
-});
+})
