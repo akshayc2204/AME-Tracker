@@ -50,10 +50,14 @@ export class ProductsService {
         { item: { fitting: { contains: s } } },
         { item: { metal: { contains: s } } },
       ]
-      const numeric = Number(s.replace(/\D/g, ''))
-      if (Number.isInteger(numeric) && numeric > 0) {
-        or.push({ sourceItemTrackingId: numeric })
-        or.push({ item: { sourceItemId: numeric } })
+      // Only match tracking / source ids for plain numeric queries — stripping digits
+      // from a UUID overflows Prisma Int fields and causes 500 errors on QR search.
+      if (/^\d{1,12}$/.test(s)) {
+        const numeric = Number(s)
+        if (Number.isSafeInteger(numeric) && numeric > 0) {
+          or.push({ sourceItemTrackingId: numeric })
+          or.push({ item: { sourceItemId: numeric } })
+        }
       }
       where.OR = or
     }

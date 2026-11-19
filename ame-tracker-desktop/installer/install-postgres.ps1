@@ -77,5 +77,17 @@ if ($db.Trim() -ne '1') {
 }
 
 Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+
+# Ensure Windows Firewall allows inbound TCP on port 3000 so mobile scanner apps can reach the API
+try {
+  $fw = Get-NetFirewallRule -DisplayName 'AME Tracker API' -ErrorAction SilentlyContinue
+  if (-not $fw) {
+    New-NetFirewallRule -DisplayName 'AME Tracker API' -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow | Out-Null
+    Write-Host 'Configured Windows Firewall rule: Inbound TCP 3000 allowed for AME Tracker API.'
+  }
+} catch {
+  Write-Warning "Could not automatically configure Windows Firewall. If mobile cannot connect, run:`nnetsh advfirewall firewall add rule name='AME Tracker API' dir=in action=allow protocol=TCP localport=3000"
+}
+
 Write-Host 'PostgreSQL is ready. In AME Tracker, set host localhost, port' $Port ', database ame_tracker, user ame_tracker.'
 Write-Host 'Trimble stays on localhost:1433 with the ame_readonly login. Do not use sa.'

@@ -41,6 +41,9 @@ copyDir(path.join(backend, 'dist'), path.join(staging, 'backend', 'dist'))
 copyDir(path.join(backend, 'prisma'), path.join(staging, 'backend', 'prisma'))
 fs.copyFileSync(path.join(backend, 'package.json'), path.join(staging, 'backend', 'package.json'))
 fs.copyFileSync(path.join(backend, 'package-lock.json'), path.join(staging, 'backend', 'package-lock.json'))
+if (fs.existsSync(path.join(backend, '.env'))) {
+  fs.copyFileSync(path.join(backend, '.env'), path.join(staging, 'backend', '.env'))
+}
 copyDir(path.join(portal, 'dist'), path.join(staging, 'portal'))
 fs.copyFileSync(process.execPath, path.join(staging, 'node', 'node.exe'))
 
